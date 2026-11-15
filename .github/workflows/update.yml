@@ -1,0 +1,70 @@
+# PEA Radar — mise à jour automatique des cours et publication du site.
+# Se lance chaque soir de semaine après la clôture d'Euronext (17h30, heure de Paris),
+# à chaque modification du dépôt, ou à la main depuis l'onglet « Actions ».
+name: Mise à jour des cours
+
+on:
+  schedule:
+    # 17:20 UTC = 18h20 à Paris en hiver, 19h20 en été (GitHub peut retarder de quelques minutes)
+    - cron: "20 17 * * 1-5"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write   # enregistrer data/prices.json dans le dépôt
+  pages: write      # publier le site
+  id-token: write   # exigé par le déploiement GitHub Pages
+
+concurrency:
+  group: pea-radar-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer yfinance (toujours la dernière version)
+        run: pip install --upgrade -r requirements.txt
+
+      - name: Télécharger les cours
+        run: python scripts/update_data.py
+
+      - name: Enregistrer les données dans le dépôt
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add data/prices.json
+          if git diff --staged --quiet; then
+            echo "Aucun changement de données."
+          else
+            git commit -m "Mise à jour des cours du $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      - name: Préparer le site
+        run: |
+          mkdir -p _site/data
+          cp index.html _site/
+          cp data/prices.json _site/data/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Publier sur GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
