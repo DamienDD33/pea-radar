@@ -1,0 +1,1462 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PEA Radar — Classement des actions & ETF éligibles PEA</title>
+
+  <!-- Polices : Inter (interface) + JetBrains Mono (chiffres) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind CSS via CDN (Play CDN : génère les classes à la volée, y compris celles injectées en JS) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    if (window.tailwind) tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace']
+          },
+          colors: {
+            ink: { 950: '#06090e', 900: '#0a0f17', 850: '#0e141e', 800: '#121a26', 700: '#1b2534', 600: '#283448' }
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    body { background: #06090e; }
+    /* Chiffres à chasse fixe pour un alignement parfait des colonnes */
+    .num { font-variant-numeric: tabular-nums; }
+    /* Fond quadrillé discret, façon terminal de trading */
+    .bg-grid {
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -10%, rgba(16,185,129,.10), transparent 60%),
+        linear-gradient(rgba(148,163,184,.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(148,163,184,.035) 1px, transparent 1px);
+      background-size: 100% 100%, 32px 32px, 32px 32px;
+    }
+    /* Pastille « live » de la mise à jour */
+    .live-dot { position: relative; }
+    .live-dot::after {
+      content: ''; position: absolute; inset: -4px; border-radius: 9999px;
+      background: rgba(52,211,153,.45); animation: ping 1.8s cubic-bezier(0,0,.2,1) infinite;
+    }
+    @keyframes ping { 75%, 100% { transform: scale(2.2); opacity: 0; } }
+    /* Apparition douce des lignes */
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .fade-up { animation: fadeUp .35s ease both; }
+    /* Fenêtre de détail */
+    @keyframes sheetIn { from { opacity: 0; transform: translateY(24px) scale(.985); } to { opacity: 1; transform: none; } }
+    .sheet-in { animation: sheetIn .28s cubic-bezier(.2,.8,.2,1) both; }
+    /* Barres de défilement sobres */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #1b2534; border-radius: 10px; border: 2px solid #06090e; }
+    select option, select optgroup { background: #0e141e; color: #e2e8f0; }
+    input[type=number]::-webkit-inner-spin-button { opacity: .4; }
+    .chart-tooltip { pointer-events: none; transition: opacity .12s; }
+  </style>
+</head>
+
+<body class="min-h-screen bg-grid font-sans text-slate-200 antialiased selection:bg-emerald-500/30">
+
+  <!-- ================================================================
+       EN-TÊTE : identité + indicateur de mise à jour quotidienne
+       ================================================================ -->
+  <header class="sticky top-0 z-30 border-b border-white/5 bg-ink-950/80 backdrop-blur-xl">
+    <div class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
+      <div class="flex items-center gap-3">
+        <!-- Logo radar -->
+        <div class="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-emerald-400/20 to-cyan-400/10 ring-1 ring-emerald-400/30">
+          <svg viewBox="0 0 24 24" class="h-5 w-5 text-emerald-300" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <circle cx="12" cy="12" r="9" opacity=".35" /><circle cx="12" cy="12" r="5" opacity=".6" />
+            <path d="M12 12 L19 6" /><circle cx="16.5" cy="8.2" r="1.3" fill="currentColor" stroke="none" />
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-base font-semibold tracking-tight text-white sm:text-lg">PEA Radar</h1>
+          <p class="text-xs text-slate-500">Actions &amp; ETF éligibles au Plan d'Épargne en Actions</p>
+        </div>
+      </div>
+
+      <!-- Indicateur de dernière mise à jour (lu dans data/prices.json) -->
+      <div class="flex flex-wrap items-center gap-2 text-xs">
+        <div id="update-pill" class="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5">
+          <span id="update-dot" class="inline-block h-2 w-2 rounded-full bg-slate-500"></span>
+          <span class="text-slate-400">Données mises à jour le</span>
+          <span id="update-stamp" class="num font-medium text-slate-300">chargement…</span>
+        </div>
+        <div class="hidden items-center gap-1.5 rounded-full border border-white/5 bg-white/[0.03] px-3 py-1.5 text-slate-500 md:flex">
+          <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <span id="next-update">Mise à jour chaque soir de semaine</span>
+        </div>
+        <span id="source-badge" class="hidden rounded-full border border-sky-400/20 bg-sky-400/5 px-2.5 py-1.5 font-medium text-sky-300/90"></span>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-7xl px-4 pb-16 pt-6 sm:px-6">
+
+    <!-- Écran de chargement des données -->
+    <div id="loading" class="grid place-items-center py-24 text-sm text-slate-400">
+      <div class="flex items-center gap-3">
+        <svg class="h-5 w-5 animate-spin text-emerald-400" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-opacity=".25" stroke-width="3"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+        Chargement des cours…
+      </div>
+    </div>
+
+    <!-- Message d'erreur si data/prices.json est inaccessible -->
+    <div id="load-error" class="mx-auto mt-10 hidden max-w-2xl rounded-2xl border border-rose-400/20 bg-rose-400/[0.04] p-6 text-sm leading-relaxed text-slate-300"></div>
+
+    <!-- Tableau de bord, affiché une fois les données chargées -->
+    <div id="dashboard" class="hidden">
+
+    <!-- ================================================================
+         INDICATEURS SYNTHÉTIQUES (recalculés selon les filtres)
+         ================================================================ -->
+    <section id="kpis" class="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Indicateurs clés"></section>
+
+    <!-- ================================================================
+         BARRE D'OUTILS : recherche, type, secteur/zone, tri, favoris
+         ================================================================ -->
+    <section class="mt-6 rounded-2xl border border-white/5 bg-ink-900/70 p-3 shadow-2xl shadow-black/30 sm:p-4" aria-label="Filtres">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-center">
+        <!-- Recherche texte -->
+        <label class="relative flex-1">
+          <span class="sr-only">Rechercher un actif</span>
+          <svg viewBox="0 0 24 24" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="search" type="search" autocomplete="off" placeholder="Rechercher par nom, ticker, secteur ou indice…"
+            class="w-full rounded-xl border border-white/5 bg-ink-800 py-2.5 pl-10 pr-12 text-sm text-slate-100 placeholder:text-slate-500 outline-none transition focus:border-emerald-400/40 focus:ring-2 focus:ring-emerald-400/15" />
+          <kbd class="absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-white/10 px-1.5 text-[10px] text-slate-500 sm:block">/</kbd>
+        </label>
+
+        <!-- Type : Tous / Actions / ETF -->
+        <div id="type-filter" class="grid grid-cols-3 rounded-xl border border-white/5 bg-ink-800 p-1 text-sm" role="radiogroup" aria-label="Type d'actif">
+          <button data-type="all" class="rounded-lg px-4 py-1.5 font-medium transition">Tous</button>
+          <button data-type="Action" class="rounded-lg px-4 py-1.5 font-medium transition">Actions</button>
+          <button data-type="ETF" class="rounded-lg px-4 py-1.5 font-medium transition">ETF</button>
+        </div>
+      </div>
+
+      <div class="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+        <!-- Secteur (actions) / zone (ETF) -->
+        <select id="sector" class="rounded-xl border border-white/5 bg-ink-800 px-3 py-2 text-sm text-slate-200 outline-none focus:border-emerald-400/40" aria-label="Secteur ou zone"></select>
+
+        <!-- Critère de tri + sens -->
+        <div class="flex items-center gap-2">
+          <select id="sort" class="flex-1 rounded-xl border border-white/5 bg-ink-800 px-3 py-2 text-sm text-slate-200 outline-none focus:border-emerald-400/40" aria-label="Critère de tri"></select>
+          <button id="sort-dir" class="grid h-9 w-9 place-items-center rounded-xl border border-white/5 bg-ink-800 text-slate-300 transition hover:border-emerald-400/30 hover:text-emerald-300" title="Inverser l'ordre de tri" aria-label="Inverser l'ordre de tri">
+            <svg id="sort-dir-icon" viewBox="0 0 24 24" class="h-4 w-4 transition-transform" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+          </button>
+        </div>
+
+        <!-- Favoris uniquement -->
+        <button id="fav-only" class="flex items-center gap-2 rounded-xl border border-white/5 bg-ink-800 px-3 py-2 text-sm text-slate-300 transition hover:border-amber-400/30" aria-pressed="false">
+          <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>
+          Favoris
+        </button>
+
+        <button id="reset" class="text-sm text-slate-500 underline-offset-4 transition hover:text-slate-200 hover:underline sm:ml-auto">Réinitialiser</button>
+      </div>
+    </section>
+
+    <!-- Ligne d'information sur le résultat -->
+    <div class="mt-5 flex flex-wrap items-baseline justify-between gap-2 px-1">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Classement</h2>
+      <p id="result-info" class="text-xs text-slate-500"></p>
+    </div>
+
+    <!-- ================================================================
+         CLASSEMENT — vue tableau (tablette / bureau)
+         ================================================================ -->
+    <section class="mt-3 hidden overflow-hidden rounded-2xl border border-white/5 bg-ink-900/70 md:block">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="border-b border-white/5 bg-white/[0.02] text-[11px] uppercase tracking-wider text-slate-500">
+            <tr>
+              <th class="py-3 pl-4 pr-2 text-left font-medium">#</th>
+              <th class="px-2 py-3 text-left font-medium"><button data-sort="name" class="th-sort inline-flex items-center gap-1 uppercase hover:text-slate-200">Actif</button></th>
+              <th class="px-2 py-3 text-left font-medium">Type</th>
+              <th class="px-2 py-3 text-right font-medium"><button data-sort="day" class="th-sort inline-flex items-center gap-1 uppercase hover:text-slate-200">Cours</button></th>
+              <th class="px-2 py-3 text-right font-medium"><button data-sort="perf2y" class="th-sort inline-flex items-center gap-1 uppercase hover:text-slate-200">Perf. 2 ans</button></th>
+              <th class="hidden px-2 py-3 text-right font-medium lg:table-cell"><button data-sort="perf1y" class="th-sort inline-flex items-center gap-1 uppercase hover:text-slate-200">1 an</button></th>
+              <th class="hidden px-2 py-3 text-right font-medium lg:table-cell"><button data-sort="vol" class="th-sort inline-flex items-center gap-1 uppercase hover:text-slate-200">Volatilité</button></th>
+              <th class="hidden px-2 py-3 text-right font-medium xl:table-cell"><button data-sort="yield" class="th-sort inline-flex items-center gap-1 uppercase hover:text-slate-200">Rendement</button></th>
+              <th class="hidden px-3 py-3 text-center font-medium lg:table-cell">Tendance 2 ans</th>
+              <th class="py-3 pl-2 pr-4"><span class="sr-only">Favori</span></th>
+            </tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- CLASSEMENT — vue cartes (mobile) -->
+    <section id="cards" class="mt-3 grid gap-2 md:hidden"></section>
+
+    <!-- État vide -->
+    <div id="empty" class="mt-3 hidden rounded-2xl border border-dashed border-white/10 p-10 text-center">
+      <p class="text-slate-300">Aucun actif ne correspond à votre recherche.</p>
+      <p id="empty-detail" class="mt-1 text-sm text-slate-500"></p>
+    </div>
+
+    </div><!-- /#dashboard -->
+
+    <!-- ================================================================
+         PIED DE PAGE : méthodologie, rappels PEA, avertissement
+         ================================================================ -->
+    <footer class="mt-10 grid gap-4 text-xs leading-relaxed text-slate-500 lg:grid-cols-3">
+      <div class="rounded-2xl border border-white/5 bg-ink-900/50 p-4">
+        <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Méthodologie</h3>
+        <p><strong class="text-slate-300">Perf. 2 ans</strong> : variation du cours de clôture entre la séance la plus proche d'il y a 2 ans et la dernière séance (hors dividendes, qui sont en revanche réinvestis dans les ETF capitalisants). <strong class="text-slate-300">Rendement</strong> : dividendes versés sur 12 mois ÷ cours actuel. <strong class="text-slate-300">Volatilité</strong> : écart-type annualisé des rendements journaliers. <strong class="text-slate-300">Ratio rendement/risque</strong> : performance annualisée divisée par la volatilité. <strong class="text-slate-300">Drawdown max</strong> : pire baisse depuis un plus haut sur la période.</p>
+      </div>
+      <div class="rounded-2xl border border-white/5 bg-ink-900/50 p-4">
+        <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Rappels PEA</h3>
+        <p>Plafond de versements de 150 000 € (PEA bancaire). Après 5 ans de détention, les gains sont exonérés d'impôt sur le revenu (hors prélèvements sociaux). Sont éligibles les actions de sociétés ayant leur siège dans l'UE/EEE et les fonds/ETF investis à 75 % minimum dans ces titres.</p>
+      </div>
+      <div class="rounded-2xl border border-amber-400/10 bg-amber-400/[0.03] p-4">
+        <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-amber-300/80">Avertissement</h3>
+        <p>Cours de clôture issus de <strong class="text-slate-300">Yahoo Finance</strong> (via yfinance, source non officielle), mis à jour chaque soir de semaine : ils peuvent comporter des erreurs ou des retards. Les frais des ETF sont indicatifs. Les performances passées ne préjugent pas des performances futures. Ceci n'est pas un conseil en investissement : vérifiez toujours l'éligibilité et les données auprès de votre courtier.</p>
+      </div>
+    </footer>
+  </main>
+
+  <!-- ================================================================
+       FENÊTRE DE DÉTAIL D'UN ACTIF
+       ================================================================ -->
+  <div id="modal" class="fixed inset-0 z-50 hidden items-end justify-center sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="d-name">
+    <div id="modal-backdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+
+    <div id="modal-panel" class="sheet-in relative max-h-[94vh] w-full max-w-5xl overflow-y-auto rounded-t-3xl border border-white/10 bg-ink-900 shadow-2xl shadow-black/60 sm:rounded-3xl">
+      <!-- En-tête de la fiche -->
+      <div class="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-white/5 bg-ink-900/95 px-4 py-4 backdrop-blur sm:px-6">
+        <div class="flex min-w-0 items-center gap-3">
+          <div id="d-avatar"></div>
+          <div class="min-w-0">
+            <h2 id="d-name" class="truncate text-lg font-semibold text-white sm:text-xl"></h2>
+            <div id="d-meta" class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500"></div>
+          </div>
+        </div>
+        <div class="flex shrink-0 items-center gap-1">
+          <button id="d-prev" class="grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-white/5 hover:text-white" title="Actif précédent (←)" aria-label="Actif précédent">
+            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+          </button>
+          <button id="d-next" class="grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-white/5 hover:text-white" title="Actif suivant (→)" aria-label="Actif suivant">
+            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+          </button>
+          <button id="d-fav" class="grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-white/5" title="Ajouter aux favoris" aria-label="Favori"></button>
+          <button id="d-close" class="grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-white/5 hover:text-white" title="Fermer (Échap)" aria-label="Fermer">
+            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="grid gap-5 p-4 sm:p-6 lg:grid-cols-[1fr_300px]">
+        <!-- Colonne principale : cours + graphique + statistiques -->
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <div id="d-price" class="num font-mono text-3xl font-semibold text-white"></div>
+              <div id="d-day" class="mt-1 flex flex-wrap items-center gap-2 text-xs"></div>
+            </div>
+            <div id="d-rank" class="rounded-full border border-white/5 bg-white/[0.03] px-3 py-1 text-xs text-slate-400"></div>
+          </div>
+
+          <!-- Contrôles du graphique -->
+          <div class="mt-5 flex flex-wrap items-center justify-between gap-3">
+            <div id="period-tabs" class="flex rounded-lg border border-white/5 bg-ink-800 p-0.5 text-xs">
+              <button data-period="1M" class="rounded-md px-3 py-1.5 font-medium transition">1M</button>
+              <button data-period="6M" class="rounded-md px-3 py-1.5 font-medium transition">6M</button>
+              <button data-period="1A" class="rounded-md px-3 py-1.5 font-medium transition">1A</button>
+              <button data-period="2A" class="rounded-md px-3 py-1.5 font-medium transition">2A</button>
+            </div>
+            <div class="flex items-center gap-3 text-xs text-slate-400">
+              <label class="flex cursor-pointer items-center gap-1.5"><input id="ma50" type="checkbox" class="accent-sky-400" /> <span class="inline-block h-0.5 w-3 rounded bg-sky-400"></span>MM 50</label>
+              <label class="flex cursor-pointer items-center gap-1.5"><input id="ma200" type="checkbox" class="accent-amber-400" /> <span class="inline-block h-0.5 w-3 rounded bg-amber-400"></span>MM 200</label>
+              <span id="period-perf" class="num rounded-md bg-white/[0.04] px-2 py-1 font-mono"></span>
+            </div>
+          </div>
+
+          <!-- Graphique de tendance (SVG généré) -->
+          <div id="chart" class="relative mt-3 w-full select-none rounded-2xl border border-white/5 bg-ink-950/60"></div>
+
+          <!-- Statistiques -->
+          <div id="d-stats" class="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4"></div>
+        </div>
+
+        <!-- Colonne latérale : description, éligibilité, risque, simulateur -->
+        <aside class="flex flex-col gap-4">
+          <div class="rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+            <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Présentation</h3>
+            <p id="d-desc" class="text-sm leading-relaxed text-slate-300"></p>
+            <dl id="d-facts" class="mt-3 space-y-1.5 text-xs"></dl>
+          </div>
+
+          <div id="d-elig" class="rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.04] p-4"></div>
+
+          <div class="rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+            <div class="mb-2 flex items-center justify-between">
+              <h3 class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Niveau de risque</h3>
+              <span id="d-risk-label" class="num font-mono text-xs text-slate-300"></span>
+            </div>
+            <div id="d-risk" class="grid grid-cols-7 gap-1"></div>
+            <p class="mt-2 text-[11px] text-slate-500">Échelle 1 à 7 inspirée du SRRI, déduite de la volatilité annualisée.</p>
+          </div>
+
+          <div class="rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+            <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Simulateur</h3>
+            <label class="text-xs text-slate-400" for="sim-amount">Montant investi au début de la période affichée</label>
+            <div class="relative mt-1.5">
+              <input id="sim-amount" type="number" min="0" step="100" value="1000" class="num w-full rounded-lg border border-white/5 bg-ink-800 py-2 pl-3 pr-8 font-mono text-sm text-white outline-none focus:border-emerald-400/40" />
+              <span class="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-500">€</span>
+            </div>
+            <div id="sim-result" class="mt-3"></div>
+            <p class="mt-2 text-[11px] text-slate-500">Hors frais de courtage, dividendes et fiscalité.</p>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   1) BASE DE DONNÉES PEA
+   ---------------------------------------------------------------------
+   Uniquement des titres éligibles au PEA :
+   - Actions de sociétés ayant leur siège dans l'UE (CAC 40, SBF 120 et
+     grandes valeurs européennes).
+   - ETF « éligibles PEA » (détenant ≥ 75 % de titres UE/EEE, souvent via
+     une réplication synthétique pour les indices hors Europe).
+   Ce tableau ne contient que les informations descriptives (nom, type,
+   secteur, description, frais des ETF). Les cours, performances,
+   volatilités et rendements sont calculés à partir des vraies données
+   de marché de data/prices.json. Les frais (ter, en %) sont indicatifs :
+   vérifiez-les sur la fiche de l'émetteur.
+   ===================================================================== */
+const PEA_DB = {
+  meta: {
+    name: 'PEA Radar DB',
+    version: '2026.11',
+    currency: 'EUR',
+    // Les cours ne sont PAS stockés ici : ils sont lus dans data/prices.json,
+    // régénéré chaque soir de semaine par GitHub Actions.
+    dataFile: 'data/prices.json'
+  },
+  assets: [
+    /* ---------------------------- ACTIONS ---------------------------- */
+    { ticker: 'MC', name: 'LVMH', type: 'Action', sector: 'Luxe', country: 'FR', market: 'Euronext Paris',
+      desc: "Numéro un mondial du luxe : mode et maroquinerie (Louis Vuitton, Dior), vins et spiritueux, parfums, horlogerie-joaillerie et distribution sélective (Sephora)." },
+    { ticker: 'RMS', name: 'Hermès International', type: 'Action', sector: 'Luxe', country: 'FR', market: 'Euronext Paris',
+      desc: "Maison de luxe familiale réputée pour sa maroquinerie, la soie et le prêt-à-porter. Modèle artisanal, marges parmi les plus élevées du secteur et forte visibilité de la demande." },
+    { ticker: 'OR', name: "L'Oréal", type: 'Action', sector: 'Consommation', country: 'FR', market: 'Euronext Paris',
+      desc: "Leader mondial des cosmétiques (Lancôme, Garnier, La Roche-Posay…), présent sur toutes les catégories de produits et tous les circuits de distribution." },
+    { ticker: 'TTE', name: 'TotalEnergies', type: 'Action', sector: 'Énergie', country: 'FR', market: 'Euronext Paris',
+      desc: "Major intégrée du pétrole et du gaz en transition vers l'électricité et les renouvelables. Politique de distribution généreuse et rachats d'actions réguliers." },
+    { ticker: 'SAN', name: 'Sanofi', type: 'Action', sector: 'Santé', country: 'FR', market: 'Euronext Paris',
+      desc: "Groupe pharmaceutique mondial : immunologie (Dupixent), vaccins, maladies rares et médecine générale. Profil défensif et dividende en hausse continue." },
+    { ticker: 'AIR', name: 'Airbus', type: 'Action', sector: 'Aéronautique & Défense', country: 'NL', market: 'Euronext Paris',
+      desc: "Premier constructeur d'avions commerciaux au monde (familles A320 et A350), également présent dans les hélicoptères, la défense et l'espace. Carnet de commandes de plus de dix ans." },
+    { ticker: 'SU', name: 'Schneider Electric', type: 'Action', sector: 'Industrie', country: 'FR', market: 'Euronext Paris',
+      desc: "Spécialiste mondial de la gestion de l'énergie et des automatismes industriels, grand bénéficiaire de l'électrification et de l'essor des data centers." },
+    { ticker: 'AI', name: 'Air Liquide', type: 'Action', sector: 'Chimie', country: 'FR', market: 'Euronext Paris',
+      desc: "Leader mondial des gaz industriels et médicaux. Contrats de long terme, croissance régulière et tradition d'attribution d'actions gratuites aux actionnaires fidèles." },
+    { ticker: 'BNP', name: 'BNP Paribas', type: 'Action', sector: 'Banque', country: 'FR', market: 'Euronext Paris',
+      desc: "Première banque de la zone euro : banque de détail, banque de financement et d'investissement, gestion d'actifs et assurance." },
+    { ticker: 'SAF', name: 'Safran', type: 'Action', sector: 'Aéronautique & Défense', country: 'FR', market: 'Euronext Paris',
+      desc: "Motoriste aéronautique (moteurs CFM des A320neo et 737 MAX), équipements et intérieurs d'avions. Activité de services après-vente particulièrement rentable." },
+    { ticker: 'EL', name: 'EssilorLuxottica', type: 'Action', sector: 'Santé', country: 'FR', market: 'Euronext Paris',
+      desc: "Leader mondial de l'optique : verres correcteurs, montures et lunettes de soleil (Ray-Ban, Oakley), avec un réseau de distribution intégré." },
+    { ticker: 'CS', name: 'AXA', type: 'Action', sector: 'Assurance', country: 'FR', market: 'Euronext Paris',
+      desc: "Assureur mondial (dommages, vie, santé) recentré sur l'assurance des entreprises et des particuliers, avec une politique de dividende soutenue." },
+    { ticker: 'DG', name: 'Vinci', type: 'Action', sector: 'BTP & Concessions', country: 'FR', market: 'Euronext Paris',
+      desc: "Concessions (autoroutes, aéroports) et construction : un modèle hybride combinant revenus récurrents et carnet de travaux mondial." },
+    { ticker: 'KER', name: 'Kering', type: 'Action', sector: 'Luxe', country: 'FR', market: 'Euronext Paris',
+      desc: "Groupe de luxe (Gucci, Saint Laurent, Bottega Veneta, Balenciaga) engagé dans une phase de redressement stratégique." },
+    { ticker: 'RI', name: 'Pernod Ricard', type: 'Action', sector: 'Spiritueux', country: 'FR', market: 'Euronext Paris',
+      desc: "Numéro deux mondial des vins et spiritueux (Absolut, Jameson, Martell, Ricard), pénalisé par le ralentissement de la consommation et les tensions commerciales." },
+    { ticker: 'BN', name: 'Danone', type: 'Action', sector: 'Consommation', country: 'FR', market: 'Euronext Paris',
+      desc: "Agroalimentaire : produits laitiers frais et d'origine végétale, nutrition spécialisée et eaux minérales (Evian, Volvic)." },
+    { ticker: 'CAP', name: 'Capgemini', type: 'Action', sector: 'Technologie', country: 'FR', market: 'Euronext Paris',
+      desc: "Leader européen du conseil et des services informatiques : transformation numérique, cloud, data et intelligence artificielle." },
+    { ticker: 'DSY', name: 'Dassault Systèmes', type: 'Action', sector: 'Technologie', country: 'FR', market: 'Euronext Paris',
+      desc: "Éditeur de logiciels de conception 3D et de simulation (CATIA, SOLIDWORKS) pour l'industrie et les sciences de la vie." },
+    { ticker: 'SGO', name: 'Saint-Gobain', type: 'Action', sector: 'Matériaux de construction', country: 'FR', market: 'Euronext Paris',
+      desc: "Leader mondial de la construction légère et durable : isolation, plâtre, vitrage et matériaux de haute performance." },
+    { ticker: 'GLE', name: 'Société Générale', type: 'Action', sector: 'Banque', country: 'FR', market: 'Euronext Paris',
+      desc: "Banque universelle française portée par son plan de redressement de rentabilité et un retour marqué des distributions aux actionnaires." },
+    { ticker: 'ACA', name: 'Crédit Agricole SA', type: 'Action', sector: 'Banque', country: 'FR', market: 'Euronext Paris',
+      desc: "Filiale cotée du premier groupe bancaire français : banque de détail, assurance et gestion d'actifs (Amundi). Rendement élevé." },
+    { ticker: 'ENGI', name: 'Engie', type: 'Action', sector: 'Services aux collectivités', country: 'FR', market: 'Euronext Paris',
+      desc: "Énergéticien mondial : renouvelables, réseaux de gaz et d'électricité, solutions énergétiques. Rendement élevé et revenus en partie régulés." },
+    { ticker: 'ORA', name: 'Orange', type: 'Action', sector: 'Télécommunications', country: 'FR', market: 'Euronext Paris',
+      desc: "Opérateur télécoms historique présent en France, en Europe et en Afrique, également actif dans la cybersécurité (Orange Cyberdefense)." },
+    { ticker: 'STLAP', name: 'Stellantis', type: 'Action', sector: 'Automobile', country: 'NL', market: 'Euronext Paris',
+      desc: "Constructeur automobile issu de la fusion PSA–FCA (Peugeot, Fiat, Jeep, Citroën…), en restructuration après un net recul de ses marges." },
+    { ticker: 'HO', name: 'Thales', type: 'Action', sector: 'Aéronautique & Défense', country: 'FR', market: 'Euronext Paris',
+      desc: "Électronique de défense, aérospatial et cybersécurité ; profite de la hausse durable des budgets militaires européens." },
+    { ticker: 'LR', name: 'Legrand', type: 'Action', sector: 'Industrie', country: 'FR', market: 'Euronext Paris',
+      desc: "Spécialiste des infrastructures électriques et numériques du bâtiment, en forte croissance sur le segment des data centers." },
+    { ticker: 'VIE', name: 'Veolia Environnement', type: 'Action', sector: 'Services aux collectivités', country: 'FR', market: 'Euronext Paris',
+      desc: "Leader mondial de la gestion de l'eau, des déchets et de l'énergie pour les collectivités et les industriels." },
+    { ticker: 'PUB', name: 'Publicis Groupe', type: 'Action', sector: 'Médias & Publicité', country: 'FR', market: 'Euronext Paris',
+      desc: "Groupe de communication et de marketing fondé sur la donnée (Epsilon, Sapient), parmi les plus performants de son secteur." },
+    { ticker: 'ML', name: 'Michelin', type: 'Action', sector: 'Automobile', country: 'FR', market: 'Euronext Paris',
+      desc: "Leader mondial du pneumatique premium, diversifié dans les matériaux composites de haute technologie." },
+    { ticker: 'RNO', name: 'Renault', type: 'Action', sector: 'Automobile', country: 'FR', market: 'Euronext Paris',
+      desc: "Constructeur automobile (Renault, Dacia, Alpine) engagé dans un plan de transformation et d'électrification de sa gamme." },
+    { ticker: 'STMPA', name: 'STMicroelectronics', type: 'Action', sector: 'Semi-conducteurs', country: 'NL', market: 'Euronext Paris',
+      desc: "Fabricant franco-italien de semi-conducteurs pour l'automobile, l'industrie et l'électronique grand public ; activité très cyclique." },
+    { ticker: 'MT', name: 'ArcelorMittal', type: 'Action', sector: 'Matériaux de base', country: 'LU', market: 'Euronext Amsterdam',
+      desc: "Deuxième sidérurgiste mondial ; activité cyclique dépendante des prix de l'acier et de la politique commerciale européenne." },
+    { ticker: 'EN', name: 'Bouygues', type: 'Action', sector: 'BTP & Concessions', country: 'FR', market: 'Euronext Paris',
+      desc: "Conglomérat : construction (Colas, Bouygues Construction), télécoms (Bouygues Telecom), médias (TF1) et services énergétiques (Equans)." },
+    { ticker: 'FGR', name: 'Eiffage', type: 'Action', sector: 'BTP & Concessions', country: 'FR', market: 'Euronext Paris',
+      desc: "Construction, travaux publics, énergie et concessions autoroutières (APRR) : un profil mêlant cyclicité et revenus récurrents." },
+    { ticker: 'BVI', name: 'Bureau Veritas', type: 'Action', sector: 'Services aux entreprises', country: 'FR', market: 'Euronext Paris',
+      desc: "Leader mondial des essais, de l'inspection et de la certification, porté par le renforcement des normes et la transition énergétique." },
+    { ticker: 'ASML', name: 'ASML Holding', type: 'Action', sector: 'Semi-conducteurs', country: 'NL', market: 'Euronext Amsterdam',
+      desc: "Monopole mondial des machines de lithographie EUV, indispensables à la fabrication des puces les plus avancées." },
+    { ticker: 'SAP', name: 'SAP SE', type: 'Action', sector: 'Technologie', country: 'DE', market: 'Xetra (Francfort)',
+      desc: "Premier éditeur européen de logiciels : progiciels de gestion (ERP) et solutions cloud pour les entreprises." },
+    { ticker: 'SIE', name: 'Siemens AG', type: 'Action', sector: 'Industrie', country: 'DE', market: 'Xetra (Francfort)',
+      desc: "Conglomérat technologique allemand : automatisation industrielle, infrastructures intelligentes, mobilité et logiciels industriels." },
+    { ticker: 'RHM', name: 'Rheinmetall', type: 'Action', sector: 'Aéronautique & Défense', country: 'DE', market: 'Xetra (Francfort)',
+      desc: "Groupe allemand de défense (munitions, véhicules blindés), devenu l'un des principaux bénéficiaires du réarmement européen." },
+    { ticker: 'LDO', name: 'Leonardo', type: 'Action', sector: 'Aéronautique & Défense', country: 'IT', market: 'Borsa Italiana (Milan)',
+      desc: "Groupe italien d'aéronautique, d'hélicoptères, d'électronique de défense et de spatial." },
+    { ticker: 'UCG', name: 'UniCredit', type: 'Action', sector: 'Banque', country: 'IT', market: 'Borsa Italiana (Milan)',
+      desc: "Banque paneuropéenne (Italie, Allemagne, Europe centrale) transformée par une politique de retour aux actionnaires très offensive." },
+    { ticker: 'RACE', name: 'Ferrari', type: 'Action', sector: 'Automobile', country: 'NL', market: 'Borsa Italiana (Milan)',
+      desc: "Constructeur de voitures de sport de luxe aux marges exceptionnelles, à mi-chemin entre l'automobile et le luxe." },
+
+    /* ------------------------------ ETF ------------------------------ */
+    { ticker: 'CW8', name: 'Amundi MSCI World Swap UCITS ETF EUR Acc', type: 'ETF', sector: 'Monde', country: 'LU', market: 'Euronext Paris',
+      index: 'MSCI World', issuer: 'Amundi', ter: 0.38, replication: 'Synthétique (swap)', distribution: 'Capitalisant',
+      desc: "Réplique les grandes et moyennes capitalisations de 23 pays développés (environ 1 400 sociétés). L'ETF « historique » des épargnants PEA, au prix unitaire élevé." },
+    { ticker: 'DCAM', name: 'Amundi PEA Monde (MSCI World) UCITS ETF', type: 'ETF', sector: 'Monde', country: 'FR', market: 'Euronext Paris',
+      index: 'MSCI World', issuer: 'Amundi', ter: 0.20, replication: 'Synthétique (swap)', distribution: 'Capitalisant',
+      desc: "Exposition MSCI World à faible prix unitaire et frais réduits, idéale pour des investissements programmés de petits montants." },
+    { ticker: 'WPEA', name: 'iShares MSCI World Swap PEA UCITS ETF', type: 'ETF', sector: 'Monde', country: 'IE', market: 'Euronext Paris',
+      index: 'MSCI World', issuer: 'iShares (BlackRock)', ter: 0.25, replication: 'Synthétique (swap)', distribution: 'Capitalisant',
+      desc: "Exposition aux actions des pays développés éligible au PEA grâce à un swap de performance, proposée par le premier émetteur mondial d'ETF." },
+    { ticker: 'ESE', name: 'BNP Paribas Easy S&P 500 UCITS ETF EUR C', type: 'ETF', sector: 'États-Unis', country: 'FR', market: 'Euronext Paris',
+      index: 'S&P 500', issuer: 'BNP Paribas AM', ter: 0.15, replication: 'Synthétique (swap)', distribution: 'Capitalisant',
+      desc: "Réplique les 500 plus grandes capitalisations américaines. Frais parmi les plus bas du marché pour une exposition aux États-Unis." },
+    { ticker: 'PE500', name: 'Amundi PEA S&P 500 UCITS ETF', type: 'ETF', sector: 'États-Unis', country: 'FR', market: 'Euronext Paris',
+      index: 'S&P 500', issuer: 'Amundi', ter: 0.15, replication: 'Synthétique (swap)', distribution: 'Capitalisant',
+      desc: "Exposition aux 500 principales entreprises américaines, éligible PEA via un panier d'actions européennes et un swap." },
+    { ticker: 'PUST', name: 'Amundi PEA Nasdaq-100 UCITS ETF', type: 'ETF', sector: 'États-Unis', country: 'FR', market: 'Euronext Paris',
+      index: 'Nasdaq-100', issuer: 'Amundi', ter: 0.30, replication: 'Synthétique (swap)', distribution: 'Capitalisant',
+      desc: "Réplique les 100 plus grandes valeurs non financières du Nasdaq, fortement concentrées sur la technologie américaine." },
+    { ticker: 'RS2K', name: 'Amundi Russell 2000 UCITS ETF EUR C', type: 'ETF', sector: 'États-Unis', country: 'LU', market: 'Euronext Paris',
+      index: 'Russell 2000', issuer: 'Amundi', ter: 0.35, replication: 'Synthétique (swap)', distribution: 'Capitalisant',
+      desc: "Exposition aux 2 000 petites capitalisations américaines, plus sensibles au cycle économique et aux taux d'intérêt." },
+    { ticker: 'C50', name: 'Amundi Euro Stoxx 50 UCITS ETF Acc', type: 'ETF', sector: 'Zone euro', country: 'LU', market: 'Euronext Paris',
+      index: 'Euro Stoxx 50', issuer: 'Amundi', ter: 0.07, replication: 'Physique', distribution: 'Capitalisant',
+      desc: "Les 50 plus grandes capitalisations de la zone euro (ASML, SAP, LVMH, Siemens…). Frais très faibles et réplication physique." },
+    { ticker: 'CAC', name: 'Amundi CAC 40 UCITS ETF Dist', type: 'ETF', sector: 'France', country: 'FR', market: 'Euronext Paris',
+      index: 'CAC 40', issuer: 'Amundi', ter: 0.25, replication: 'Physique', distribution: 'Distribuant',
+      desc: "Réplique les 40 principales valeurs de la Bourse de Paris et reverse les dividendes perçus aux porteurs." },
+    { ticker: 'PCEU', name: 'Amundi PEA MSCI Europe UCITS ETF', type: 'ETF', sector: 'Europe', country: 'FR', market: 'Euronext Paris',
+      index: 'MSCI Europe', issuer: 'Amundi', ter: 0.15, replication: 'Synthétique (swap)', distribution: 'Capitalisant',
+      desc: "Exposition large aux grandes et moyennes capitalisations de 15 pays européens développés, Royaume-Uni et Suisse compris." },
+    { ticker: 'ETZ', name: 'BNP Paribas Easy Stoxx Europe 600 UCITS ETF EUR C', type: 'ETF', sector: 'Europe', country: 'FR', market: 'Euronext Paris',
+      index: 'Stoxx Europe 600', issuer: 'BNP Paribas AM', ter: 0.20, replication: 'Physique', distribution: 'Capitalisant',
+      desc: "Les 600 principales sociétés européennes, toutes tailles confondues : la diversification européenne la plus large." },
+    { ticker: 'PAEEM', name: 'Amundi PEA Marchés Émergents (MSCI EM) UCITS ETF', type: 'ETF', sector: 'Marchés émergents', country: 'FR', market: 'Euronext Paris',
+      index: 'MSCI Emerging Markets', issuer: 'Amundi', ter: 0.30, replication: 'Synthétique (swap)', distribution: 'Capitalisant',
+      desc: "Exposition aux actions des pays émergents (Chine, Inde, Taïwan, Corée, Brésil…), complément de diversification à un ETF Monde." },
+    { ticker: 'PAASI', name: 'Amundi PEA MSCI Emerging Asia UCITS ETF', type: 'ETF', sector: 'Marchés émergents', country: 'FR', market: 'Euronext Paris',
+      index: 'MSCI EM Asia', issuer: 'Amundi', ter: 0.20, replication: 'Synthétique (swap)', distribution: 'Capitalisant',
+      desc: "Concentré sur l'Asie émergente (Chine, Taïwan, Inde, Corée du Sud), où se trouvent les grands acteurs mondiaux des semi-conducteurs." },
+    { ticker: 'PTPXE', name: 'Amundi PEA Japan Topix UCITS ETF', type: 'ETF', sector: 'Japon', country: 'FR', market: 'Euronext Paris',
+      index: 'Topix', issuer: 'Amundi', ter: 0.20, replication: 'Synthétique (swap)', distribution: 'Capitalisant',
+      desc: "Réplique l'ensemble des grandes sociétés cotées à Tokyo, portées par les réformes de gouvernance et le retour aux actionnaires." }
+  ]
+};
+
+/* Libellés de pays pour les justificatifs d'éligibilité */
+const COUNTRY = { FR: 'France', NL: 'Pays-Bas', DE: 'Allemagne', IT: 'Italie', LU: 'Luxembourg', IE: 'Irlande' };
+
+/* =====================================================================
+   2) UTILITAIRES : hachage, formats, sélecteurs
+   ===================================================================== */
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+/** Hachage FNV-1a d'une chaîne → entier 32 bits (couleur stable de l'avatar). */
+function hashStr(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+
+/** Échappe le HTML pour tout texte potentiellement saisi par l'utilisateur. */
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/** Supprime accents et casse pour une recherche tolérante. */
+function normalize(s) {
+  return String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+const nfEUR = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtEUR = (v) => nfEUR.format(v);
+const fmtEUR0 = (v) => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(v);
+
+/** Pourcentage signé : 0.1234 → « +12,34 % ». */
+function fmtPct(v, digits = 2, signed = true) {
+  const s = (Math.abs(v) * 100).toLocaleString('fr-FR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const sign = v > 0 && signed ? '+' : v < 0 ? '−' : '';
+  return `${sign}${s} %`;
+}
+
+/** Nombre pour les axes (sans symbole monétaire). */
+function fmtNum(v) {
+  const d = v >= 1000 ? 0 : v >= 100 ? 1 : 2;
+  return v.toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
+const fmtDate = (d) => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+const fmtDateShort = (d) => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+const fmtMonthYear = (d) => d.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' });
+const fmtStamp = (d) =>
+  d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) +
+  ' à ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+
+const colorOf = (v) => (v >= 0 ? 'text-emerald-400' : 'text-rose-400');
+
+/* =====================================================================
+   3) CHARGEMENT DES DONNÉES RÉELLES
+   ---------------------------------------------------------------------
+   Les cours proviennent du fichier data/prices.json, régénéré chaque
+   soir de semaine par GitHub Actions (scripts/update_data.py, source :
+   Yahoo Finance via yfinance). Format :
+   { generatedAt, source, failed: [tickers],
+     assets: { TICKER: { symbol, dates: ['AAAA-MM-JJ'…], close: […],
+                         div12m, stale } } }
+   ===================================================================== */
+const DATA_URL = 'data/prices.json';
+const STALE_AFTER_DAYS = 4;    // au-delà, les données sont signalées comme anciennes
+
+let DATA_META = null;          // { generatedAt: Date, source, failed, lastMarketDate }
+let ASSETS = [];               // actifs de la base enrichis de leurs cours
+let RANK_2Y = new Map();       // rang de chaque actif sur la performance 2 ans
+let MISSING = [];              // actifs de la base absents du fichier de données
+
+/** « 2026-11-13 » → Date locale (sans décalage de fuseau). */
+function parseDate(s) {
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+/**
+ * Index du dernier point dont la date est ≤ (dernière date − N mois),
+ * c'est-à-dire le cours de clôture de référence pour une performance sur N mois.
+ * Renvoie 0 si l'historique est plus court que la période.
+ */
+function indexMonthsAgo(dates, months) {
+  const target = new Date(dates[dates.length - 1]);
+  target.setMonth(target.getMonth() - months);
+  let i = dates.length - 1;
+  while (i > 0 && dates[i] > target) i--;
+  return i;
+}
+
+/** Moyenne mobile simple (null tant que la fenêtre n'est pas remplie). */
+function sma(arr, k) {
+  const out = new Array(arr.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < arr.length; i++) {
+    sum += arr[i];
+    if (i >= k) sum -= arr[i - k];
+    if (i >= k - 1) out[i] = sum / k;
+  }
+  return out;
+}
+
+/** Sous-échantillonnage pour les mini-graphiques. */
+function downsample(arr, n) {
+  if (arr.length <= n) return arr.slice();
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(arr[Math.round(i * (arr.length - 1) / (n - 1))]);
+  return out;
+}
+
+/** Indicateurs financiers calculés sur la fenêtre de 2 ans (p = cours, d = dates). */
+function computeMetrics(p, d) {
+  const n = p.length, last = p[n - 1];
+  const at = (months) => p[indexMonthsAgo(d, months)];
+
+  // Volatilité annualisée (écart-type des log-rendements journaliers × √252)
+  const rets = [];
+  for (let i = 1; i < n; i++) rets.push(Math.log(p[i] / p[i - 1]));
+  const mean = rets.reduce((a, b) => a + b, 0) / Math.max(1, rets.length);
+  const variance = rets.reduce((a, r) => a + (r - mean) ** 2, 0) / Math.max(1, rets.length - 1);
+  const vol = Math.sqrt(variance * 252);
+
+  // Drawdown maximal : pire baisse depuis un plus haut
+  let peak = p[0], maxDD = 0;
+  for (const v of p) { if (v > peak) peak = v; const dd = v / peak - 1; if (dd < maxDD) maxDD = dd; }
+
+  const perf2y = last / p[0] - 1;
+  const years = (d[n - 1] - d[0]) / (365.25 * 86400000);
+  const cagr = years > 0.05 ? Math.pow(1 + perf2y, 1 / years) - 1 : 0;
+  const year = p.slice(indexMonthsAgo(d, 12));
+
+  return {
+    last,
+    day: n > 1 ? last / p[n - 2] - 1 : 0,
+    perf1m: last / at(1) - 1,
+    perf6m: last / at(6) - 1,
+    perf1y: last / at(12) - 1,
+    perf2y,
+    cagr,
+    vol,
+    maxDD,
+    ratio: vol > 0 ? cagr / vol : 0,
+    high52: Math.max(...year),
+    low52: Math.min(...year),
+    years,
+    fullHistory: years >= 1.95   // faux pour un titre coté depuis moins de 2 ans
+  };
+}
+
+/** Niveau de risque 1→7 selon les seuils de volatilité de l'échelle SRRI. */
+function riskLevel(vol) {
+  const bounds = [0.005, 0.02, 0.05, 0.10, 0.15, 0.25];
+  const idx = bounds.findIndex((b) => vol < b);
+  return idx === -1 ? 7 : idx + 1;
+}
+
+/** Associe une fiche de la base à sa série de cours. */
+function buildAsset(meta, raw) {
+  const datesAll = raw.dates.map(parseDate);
+  const closeAll = raw.close.map(Number);
+  // Moyennes mobiles calculées sur tout l'historique reçu (2 ans + marge)
+  const ma50All = sma(closeAll, 50);
+  const ma200All = sma(closeAll, 200);
+  const start = indexMonthsAgo(datesAll, 24);
+
+  const series = closeAll.slice(start);
+  const dates = datesAll.slice(start);
+  const m = computeMetrics(series, dates);
+
+  return {
+    ...meta,
+    symbol: raw.symbol,
+    stale: !!raw.stale,
+    series,
+    dates,
+    ma50: ma50All.slice(start),
+    ma200: ma200All.slice(start),
+    spark: downsample(series, 70),
+    m,
+    // Rendement = dividendes versés sur 12 mois / cours actuel (en %)
+    div: raw.div12m > 0 ? (raw.div12m / m.last) * 100 : 0
+  };
+}
+
+/** Télécharge data/prices.json et construit la liste des actifs. */
+async function loadData() {
+  const res = await fetch(`${DATA_URL}?t=${Date.now()}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json();
+  if (!json || !json.assets) throw new Error('format de fichier inattendu');
+
+  ASSETS = [];
+  MISSING = [];
+  for (const meta of PEA_DB.assets) {
+    const raw = json.assets[meta.ticker];
+    if (raw && Array.isArray(raw.close) && raw.close.length >= 30) ASSETS.push(buildAsset(meta, raw));
+    else MISSING.push(meta);
+  }
+  if (!ASSETS.length) throw new Error('aucun actif exploitable dans le fichier');
+
+  const lastMarketDate = ASSETS.reduce((mx, a) => {
+    const d = a.dates[a.dates.length - 1];
+    return d > mx ? d : mx;
+  }, ASSETS[0].dates[0]);
+
+  DATA_META = {
+    generatedAt: new Date(json.generatedAt),
+    source: json.source || 'Yahoo Finance',
+    failed: json.failed || [],
+    lastMarketDate
+  };
+
+  RANK_2Y = new Map([...ASSETS].sort((a, b) => b.m.perf2y - a.m.perf2y).map((a, i) => [a.ticker, i + 1]));
+}
+
+/* =====================================================================
+   5) CRITÈRES DE TRI ET ÉTAT DE L'APPLICATION
+   ===================================================================== */
+const SORTS = {
+  perf2y: { label: 'Performance 2 ans',             get: (a) => a.m.perf2y, dir: 'desc' },
+  perf1y: { label: 'Performance 1 an',              get: (a) => a.m.perf1y, dir: 'desc' },
+  perf6m: { label: 'Performance 6 mois',            get: (a) => a.m.perf6m, dir: 'desc' },
+  perf1m: { label: 'Performance 1 mois',            get: (a) => a.m.perf1m, dir: 'desc' },
+  yield:  { label: 'Rendement (dividende)',          get: (a) => a.div,      dir: 'desc' },
+  vol:    { label: 'Volatilité',                     get: (a) => a.m.vol,    dir: 'asc'  },
+  ratio:  { label: 'Ratio rendement / risque',       get: (a) => a.m.ratio,  dir: 'desc' },
+  dd:     { label: 'Drawdown max (le plus faible)',  get: (a) => a.m.maxDD,  dir: 'desc' },
+  day:    { label: 'Variation du jour',              get: (a) => a.m.day,    dir: 'desc' },
+  name:   { label: 'Nom',                            get: (a) => a.name,     dir: 'asc'  }
+};
+
+/* Périodes du graphique, en mois calendaires */
+const PERIODS = { '1M': 1, '6M': 6, '1A': 12, '2A': 24 };
+
+const DEFAULTS = { query: '', type: 'all', sector: 'all', sort: 'perf2y', dir: 'desc', favOnly: false };
+
+const state = {
+  ...DEFAULTS,
+  favorites: loadFavorites(),
+  filtered: [],
+  current: null,       // actif ouvert dans la fiche
+  period: '2A',
+  ma50: false,
+  ma200: false
+};
+
+/* Favoris : stockage local (protégé par try/catch, ex. navigation privée) */
+function loadFavorites() {
+  try { return new Set(JSON.parse(localStorage.getItem('pea-radar-favs') || '[]')); }
+  catch (e) { return new Set(); }
+}
+function saveFavorites() {
+  try { localStorage.setItem('pea-radar-favs', JSON.stringify([...state.favorites])); } catch (e) { /* stockage indisponible */ }
+}
+function toggleFav(ticker) {
+  state.favorites.has(ticker) ? state.favorites.delete(ticker) : state.favorites.add(ticker);
+  saveFavorites();
+  applyFilters();
+  if (state.current && state.current.ticker === ticker) renderFavButton();
+}
+
+/* =====================================================================
+   6) COMPOSANTS D'AFFICHAGE RÉUTILISABLES
+   ===================================================================== */
+function avatar(a, size = 'h-9 w-9 text-[10px]') {
+  const h = hashStr(a.ticker) % 360;
+  const label = a.ticker.length > 4 ? a.ticker.slice(0, 4) : a.ticker;
+  return `<div class="${size} grid shrink-0 place-items-center rounded-lg font-mono font-semibold"
+    style="background:hsla(${h},70%,55%,.13);color:hsl(${h},85%,74%);box-shadow:inset 0 0 0 1px hsla(${h},70%,60%,.25)">${esc(label)}</div>`;
+}
+
+function typeBadge(type) {
+  return type === 'ETF'
+    ? '<span class="inline-flex items-center rounded-md bg-violet-400/10 px-2 py-0.5 text-[11px] font-medium text-violet-300 ring-1 ring-inset ring-violet-400/20">ETF</span>'
+    : '<span class="inline-flex items-center rounded-md bg-sky-400/10 px-2 py-0.5 text-[11px] font-medium text-sky-300 ring-1 ring-inset ring-sky-400/20">Action</span>';
+}
+
+function pctPill(v) {
+  const pos = v >= 0;
+  return `<span class="num inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-xs font-medium ${pos ? 'bg-emerald-400/10 text-emerald-400' : 'bg-rose-400/10 text-rose-400'}">
+    <svg viewBox="0 0 10 10" class="h-2 w-2 ${pos ? '' : 'rotate-180'}" fill="currentColor"><path d="M5 1 9 8H1z"/></svg>${fmtPct(v)}</span>`;
+}
+
+function starIcon(active) {
+  return `<svg viewBox="0 0 24 24" class="h-4 w-4" fill="${active ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>`;
+}
+
+/** Barre horizontale proportionnelle + valeur de performance. */
+function perfBar(v, maxAbs) {
+  const w = Math.min(100, (Math.abs(v) / maxAbs) * 100);
+  const pos = v >= 0;
+  return `<div class="flex items-center justify-end gap-3">
+    <div class="hidden h-1.5 w-20 overflow-hidden rounded-full bg-white/5 xl:block">
+      <div class="h-full rounded-full ${pos ? 'bg-emerald-400/80' : 'bg-rose-400/80'}" style="width:${w.toFixed(1)}%"></div>
+    </div>
+    <span class="num w-[5.5rem] text-right font-mono font-semibold ${colorOf(v)}">${fmtPct(v, 1)}</span>
+  </div>`;
+}
+
+/** Mini-graphique (sparkline) sur 2 ans. */
+function sparkline(arr, w = 112, h = 32) {
+  const min = Math.min(...arr), max = Math.max(...arr), span = max - min || 1;
+  const pts = arr.map((v, i) => `${((i / (arr.length - 1)) * w).toFixed(1)},${(h - 2 - ((v - min) / span) * (h - 4)).toFixed(1)}`);
+  const up = arr[arr.length - 1] >= arr[0];
+  const c = up ? '#34d399' : '#fb7185';
+  return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" class="overflow-visible" aria-hidden="true">
+    <polygon points="0,${h} ${pts.join(' ')} ${w},${h}" fill="${c}" opacity=".08"/>
+    <polyline points="${pts.join(' ')}" fill="none" stroke="${c}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+  </svg>`;
+}
+
+/** Style du rang : or / argent / bronze pour le podium. */
+function rankBadge(rank) {
+  const styles = {
+    1: 'bg-amber-300/15 text-amber-300 ring-amber-300/30',
+    2: 'bg-slate-300/10 text-slate-200 ring-slate-300/25',
+    3: 'bg-orange-400/10 text-orange-300 ring-orange-400/25'
+  };
+  return styles[rank]
+    ? `<span class="num grid h-6 w-6 place-items-center rounded-md font-mono text-[11px] font-semibold ring-1 ${styles[rank]}">${rank}</span>`
+    : `<span class="num grid h-6 w-6 place-items-center font-mono text-xs text-slate-500">${rank}</span>`;
+}
+
+/* =====================================================================
+   7) FILTRAGE, TRI ET RENDU DU CLASSEMENT
+   ===================================================================== */
+function applyFilters() {
+  const q = normalize(state.query.trim());
+  const list = ASSETS.filter((a) => {
+    if (state.type !== 'all' && a.type !== state.type) return false;
+    if (state.sector !== 'all' && a.sector !== state.sector) return false;
+    if (state.favOnly && !state.favorites.has(a.ticker)) return false;
+    if (q) {
+      const hay = normalize(`${a.name} ${a.ticker} ${a.sector} ${a.index || ''} ${a.issuer || ''}`);
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const s = SORTS[state.sort];
+  const mult = state.dir === 'asc' ? 1 : -1;
+  list.sort((x, y) => {
+    const a = s.get(x), b = s.get(y);
+    if (typeof a === 'string') return a.localeCompare(b, 'fr') * mult;
+    return (a - b) * mult || x.name.localeCompare(y.name, 'fr');
+  });
+
+  state.filtered = list;
+  render();
+}
+
+function render() {
+  const list = state.filtered;
+  renderKPIs(list);
+  renderTable(list);
+  renderCards(list);
+  renderControls();
+
+  const dirLabel = state.dir === 'desc' ? 'décroissant' : 'croissant';
+  $('#result-info').innerHTML =
+    `<span class="text-slate-300">${list.length}</span> actif${list.length > 1 ? 's' : ''} · trié${list.length > 1 ? 's' : ''} par <span class="text-slate-300">${SORTS[state.sort].label.toLowerCase()}</span> (${dirLabel})`
+    + (MISSING.length
+      ? ` · <span class="text-amber-300/90" title="${esc(MISSING.map((a) => a.ticker).join(', '))}">${MISSING.length} actif${MISSING.length > 1 ? 's' : ''} sans données</span>`
+      : '');
+
+  const empty = list.length === 0;
+  $('#empty').classList.toggle('hidden', !empty);
+  $('#empty-detail').innerHTML = state.query
+    ? `Aucun résultat pour « ${esc(state.query)} ». Essayez un ticker (ex. MC, CW8) ou un secteur.`
+    : state.favOnly ? 'Vous n\'avez pas encore de favoris : cliquez sur l\'étoile d\'un actif pour l\'ajouter.' : 'Modifiez ou réinitialisez les filtres.';
+}
+
+/** Cartes d'indicateurs synthétiques. */
+function renderKPIs(list) {
+  const n = list.length;
+  const nEtf = list.filter((a) => a.type === 'ETF').length;
+  const perfs = list.map((a) => a.m.perf2y).sort((a, b) => a - b);
+  const avg = n ? perfs.reduce((a, b) => a + b, 0) / n : 0;
+  const med = n ? (n % 2 ? perfs[(n - 1) / 2] : (perfs[n / 2 - 1] + perfs[n / 2]) / 2) : 0;
+  const best = n ? list.reduce((b, a) => (a.m.perf2y > b.m.perf2y ? a : b)) : null;
+  const up = list.filter((a) => a.m.perf2y > 0).length;
+  const upPct = n ? (up / n) * 100 : 0;
+
+  const card = (label, value, sub, extra = '') =>
+    `<div class="rounded-2xl border border-white/5 bg-ink-900/70 p-4 ${extra}">
+      <div class="text-[11px] font-medium uppercase tracking-wider text-slate-500">${label}</div>
+      <div class="mt-2">${value}</div>
+      <div class="mt-1 text-xs text-slate-500">${sub}</div>
+    </div>`;
+
+  $('#kpis').innerHTML = [
+    card('Actifs affichés',
+      `<span class="num font-mono text-2xl font-semibold text-white">${n}</span><span class="text-sm text-slate-500"> / ${ASSETS.length}</span>`,
+      `${n - nEtf} actions · ${nEtf} ETF`),
+    card('Perf. moyenne 2 ans',
+      `<span class="num font-mono text-2xl font-semibold ${colorOf(avg)}">${n ? fmtPct(avg, 1) : '—'}</span>`,
+      `Médiane : <span class="num font-mono ${colorOf(med)}">${n ? fmtPct(med, 1) : '—'}</span>`),
+    best
+      ? `<button data-open="${best.ticker}" class="group rounded-2xl border border-white/5 bg-ink-900/70 p-4 text-left transition hover:border-emerald-400/30">
+          <div class="text-[11px] font-medium uppercase tracking-wider text-slate-500">Meilleure perf. 2 ans</div>
+          <div class="mt-2 flex items-center gap-2">${avatar(best, 'h-7 w-7 text-[9px]')}<span class="truncate font-semibold text-white group-hover:text-emerald-300">${esc(best.name)}</span></div>
+          <div class="mt-1 text-xs text-slate-500"><span class="font-mono">${best.ticker}</span> · <span class="num font-mono text-emerald-400">${fmtPct(best.m.perf2y, 1)}</span></div>
+        </button>`
+      : card('Meilleure perf. 2 ans', '<span class="text-2xl text-slate-600">—</span>', 'Aucun actif'),
+    card('En hausse sur 2 ans',
+      `<span class="num font-mono text-2xl font-semibold text-white">${up}</span><span class="text-sm text-slate-500"> / ${n}</span>
+       <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-rose-400/30"><div class="h-full rounded-full bg-emerald-400" style="width:${upPct.toFixed(1)}%"></div></div>`,
+      `${upPct.toFixed(0)} % de la sélection`)
+  ].join('');
+}
+
+/** Tableau (tablette / bureau). */
+function renderTable(list) {
+  const maxAbs = Math.max(0.01, ...list.map((a) => Math.abs(a.m.perf2y)));
+  $('#table-body').innerHTML = list.map((a, i) => {
+    const fav = state.favorites.has(a.ticker);
+    return `<tr data-ticker="${a.ticker}" tabindex="0"
+        class="fade-up cursor-pointer border-b border-white/[0.04] outline-none transition hover:bg-white/[0.03] focus-visible:bg-white/[0.05]"
+        style="animation-delay:${Math.min(i, 20) * 18}ms">
+      <td class="py-3 pl-4 pr-2">${rankBadge(i + 1)}</td>
+      <td class="px-2 py-3">
+        <div class="flex items-center gap-3">
+          ${avatar(a)}
+          <div class="min-w-0">
+            <div class="max-w-[18rem] truncate font-medium text-slate-100">${esc(a.name)}</div>
+            <div class="text-xs text-slate-500"><span class="font-mono text-slate-400">${a.ticker}</span> · ${esc(a.sector)}</div>
+          </div>
+        </div>
+      </td>
+      <td class="px-2 py-3">${typeBadge(a.type)}</td>
+      <td class="px-2 py-3 text-right">
+        <div class="num font-mono text-slate-100">${fmtEUR(a.m.last)}</div>
+        <div class="num font-mono text-[11px] ${colorOf(a.m.day)}">${fmtPct(a.m.day)}</div>
+      </td>
+      <td class="px-2 py-3">${perfBar(a.m.perf2y, maxAbs)}</td>
+      <td class="num hidden px-2 py-3 text-right font-mono lg:table-cell ${colorOf(a.m.perf1y)}">${fmtPct(a.m.perf1y, 1)}</td>
+      <td class="num hidden px-2 py-3 text-right font-mono text-slate-300 lg:table-cell">${fmtPct(a.m.vol, 1, false)}</td>
+      <td class="num hidden px-2 py-3 text-right font-mono xl:table-cell ${a.div > 0 ? 'text-slate-300' : 'text-slate-600'}">${a.div > 0 ? fmtPct(a.div / 100, 1, false) : (a.type === 'ETF' ? 'Capi.' : '—')}</td>
+      <td class="hidden px-3 py-3 lg:table-cell"><div class="flex justify-center">${sparkline(a.spark)}</div></td>
+      <td class="py-3 pl-2 pr-4 text-right">
+        <button data-fav="${a.ticker}" class="rounded-md p-1.5 transition hover:bg-white/5 ${fav ? 'text-amber-300' : 'text-slate-600 hover:text-slate-300'}" aria-label="${fav ? 'Retirer des' : 'Ajouter aux'} favoris">${starIcon(fav)}</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  // Indicateur de tri dans les en-têtes
+  $$('.th-sort').forEach((btn) => {
+    const active = btn.dataset.sort === state.sort;
+    btn.classList.toggle('text-emerald-300', active);
+    const arrow = active ? (state.dir === 'desc' ? ' ↓' : ' ↑') : '';
+    btn.dataset.label = btn.dataset.label || btn.textContent;
+    btn.textContent = btn.dataset.label + arrow;
+  });
+}
+
+/** Cartes (mobile). */
+function renderCards(list) {
+  $('#cards').innerHTML = list.map((a, i) => {
+    const fav = state.favorites.has(a.ticker);
+    return `<div data-ticker="${a.ticker}" tabindex="0" class="fade-up cursor-pointer rounded-2xl border border-white/5 bg-ink-900/70 p-3 outline-none transition active:bg-white/[0.04]" style="animation-delay:${Math.min(i, 12) * 25}ms">
+      <div class="flex items-center gap-3">
+        ${rankBadge(i + 1)}
+        ${avatar(a)}
+        <div class="min-w-0 flex-1">
+          <div class="truncate font-medium text-slate-100">${esc(a.name)}</div>
+          <div class="mt-0.5 flex items-center gap-2 text-xs text-slate-500"><span class="font-mono text-slate-400">${a.ticker}</span>${typeBadge(a.type)}</div>
+        </div>
+        <button data-fav="${a.ticker}" class="rounded-md p-1.5 ${fav ? 'text-amber-300' : 'text-slate-600'}" aria-label="Favori">${starIcon(fav)}</button>
+      </div>
+      <div class="mt-3 flex items-end justify-between gap-3">
+        <div>
+          <div class="text-[10px] uppercase tracking-wider text-slate-500">Cours</div>
+          <div class="num font-mono text-sm text-slate-100">${fmtEUR(a.m.last)} <span class="text-[11px] ${colorOf(a.m.day)}">${fmtPct(a.m.day)}</span></div>
+        </div>
+        <div class="opacity-90">${sparkline(a.spark, 84, 28)}</div>
+        <div class="text-right">
+          <div class="text-[10px] uppercase tracking-wider text-slate-500">Perf. 2 ans</div>
+          <div class="num font-mono text-base font-semibold ${colorOf(a.m.perf2y)}">${fmtPct(a.m.perf2y, 1)}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/** Synchronise l'état visuel des contrôles avec l'état applicatif. */
+function renderControls() {
+  $$('#type-filter button').forEach((b) => {
+    const active = b.dataset.type === state.type;
+    b.className = `rounded-lg px-4 py-1.5 font-medium transition ${active ? 'bg-emerald-400/15 text-emerald-300 shadow-inner' : 'text-slate-400 hover:text-slate-200'}`;
+    b.setAttribute('aria-checked', active);
+  });
+  $('#sort').value = state.sort;
+  $('#sector').value = state.sector;
+  $('#search').value !== state.query && ($('#search').value = state.query);
+  $('#sort-dir-icon').style.transform = state.dir === 'asc' ? 'rotate(180deg)' : 'none';
+  const fo = $('#fav-only');
+  fo.setAttribute('aria-pressed', state.favOnly);
+  fo.className = `flex items-center gap-2 rounded-xl border px-3 py-2 text-sm transition ${state.favOnly ? 'border-amber-400/40 bg-amber-400/10 text-amber-300' : 'border-white/5 bg-ink-800 text-slate-300 hover:border-amber-400/30'}`;
+}
+
+/* =====================================================================
+   8) FICHE DÉTAIL : graphique, statistiques, éligibilité, simulateur
+   ===================================================================== */
+function openDetail(ticker) {
+  const a = ASSETS.find((x) => x.ticker === ticker);
+  if (!a) return;
+  state.current = a;
+  const m = a.m;
+
+  $('#d-avatar').innerHTML = avatar(a, 'h-12 w-12 text-xs');
+  $('#d-name').textContent = a.name;
+  $('#d-meta').innerHTML = `<span class="font-mono text-slate-300">${a.ticker}</span><span>·</span><span>${esc(a.market)}</span><span>·</span>${typeBadge(a.type)}<span class="rounded-md bg-white/5 px-2 py-0.5 text-[11px] text-slate-400">${esc(a.sector)}</span>`;
+  $('#d-price').textContent = fmtEUR(m.last);
+  $('#d-day').innerHTML = `${pctPill(m.day)}<span class="text-slate-500">Clôture du ${fmtDate(a.dates[a.dates.length - 1])}</span>`
+    + (a.stale ? '<span class="rounded-md bg-amber-400/10 px-1.5 py-0.5 text-amber-300" title="Le dernier téléchargement a échoué pour cet actif">non actualisé</span>' : '');
+  $('#d-rank').innerHTML = `Rang <span class="num font-mono font-semibold text-white">#${RANK_2Y.get(a.ticker)}</span> / ${ASSETS.length} sur 2 ans`
+    + (m.fullHistory ? '' : ` <span class="text-amber-300">(historique depuis le ${fmtDate(a.dates[0])})</span>`);
+
+  // Grille de statistiques
+  const stats = [
+    ['Perf. 2 ans', fmtPct(m.perf2y), colorOf(m.perf2y)],
+    ['Perf. annualisée', fmtPct(m.cagr), colorOf(m.cagr)],
+    ['Perf. 1 an', fmtPct(m.perf1y), colorOf(m.perf1y)],
+    ['Perf. 6 mois', fmtPct(m.perf6m), colorOf(m.perf6m)],
+    ['Volatilité ann.', fmtPct(m.vol, 1, false), 'text-slate-100'],
+    ['Drawdown max', fmtPct(m.maxDD, 1), 'text-rose-400'],
+    ['Plus haut 52 sem.', fmtEUR(m.high52), 'text-slate-100'],
+    ['Plus bas 52 sem.', fmtEUR(m.low52), 'text-slate-100'],
+    ['Ratio rdt / risque', m.ratio.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), m.ratio >= 0.5 ? 'text-emerald-400' : m.ratio >= 0 ? 'text-slate-100' : 'text-rose-400'],
+    ['Rendement', a.div > 0 ? fmtPct(a.div / 100, 1, false) : (a.type === 'ETF' ? 'Capitalisant' : '—'), 'text-slate-100']
+  ];
+  if (a.type === 'ETF') {
+    stats.push(['Frais (TER, indicatif)', fmtPct(a.ter / 100, 2, false), 'text-slate-100']);
+    stats.push(['Écart au + haut', fmtPct(m.last / m.high52 - 1, 1), colorOf(m.last / m.high52 - 1)]);
+  } else {
+    stats.push(['Perf. 1 mois', fmtPct(m.perf1m), colorOf(m.perf1m)]);
+    stats.push(['Écart au + haut', fmtPct(m.last / m.high52 - 1, 1), colorOf(m.last / m.high52 - 1)]);
+  }
+  $('#d-stats').innerHTML = stats.map(([label, value, cls]) =>
+    `<div class="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2.5">
+      <div class="text-[10px] uppercase tracking-wider text-slate-500">${label}</div>
+      <div class="num mt-1 font-mono text-sm font-semibold ${cls}">${value}</div>
+    </div>`).join('');
+
+  // Présentation + fiche signalétique
+  $('#d-desc').textContent = a.desc;
+  const facts = a.type === 'ETF'
+    ? [['Émetteur', a.issuer], ['Indice répliqué', a.index], ['Réplication', a.replication], ['Dividendes', a.distribution], ['Domicile', COUNTRY[a.country]], ['Frais courants (indicatif)', fmtPct(a.ter / 100, 2, false) + ' / an'], ['Code Yahoo', a.symbol]]
+    : [['Siège social', COUNTRY[a.country]], ['Place de cotation', a.market], ['Secteur', a.sector], ['Rendement (12 mois)', a.div > 0 ? fmtPct(a.div / 100, 1, false) : '—'], ['Code Yahoo', a.symbol]];
+  $('#d-facts').innerHTML = facts.map(([k, v]) =>
+    `<div class="flex justify-between gap-3 border-t border-white/5 pt-1.5"><dt class="text-slate-500">${k}</dt><dd class="text-right text-slate-300">${esc(v)}</dd></div>`).join('');
+
+  renderEligibility(a);
+  renderRisk(a);
+  renderFavButton();
+  renderPeriodTabs();
+  renderChart();
+  updateSim();
+
+  const modal = $('#modal');
+  if (modal.classList.contains('hidden')) {
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    document.body.style.overflow = 'hidden';
+    const panel = $('#modal-panel');
+    panel.classList.remove('sheet-in'); void panel.offsetWidth; panel.classList.add('sheet-in');
+  }
+  $('#modal-panel').scrollTop = 0;
+}
+
+function closeDetail() {
+  const modal = $('#modal');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+  document.body.style.overflow = '';
+  const t = state.current && document.querySelector(`#table-body [data-ticker="${state.current.ticker}"]`);
+  state.current = null;
+  if (t && t.offsetParent) t.focus({ preventScroll: true });
+}
+
+/** Navigation précédent / suivant dans le classement courant. */
+function stepDetail(delta) {
+  if (!state.current) return;
+  const list = state.filtered.length ? state.filtered : ASSETS;
+  let idx = list.findIndex((a) => a.ticker === state.current.ticker);
+  if (idx === -1) idx = 0;
+  const next = list[(idx + delta + list.length) % list.length];
+  openDetail(next.ticker);
+}
+
+/** Encadré de confirmation de l'éligibilité PEA, avec justification. */
+function renderEligibility(a) {
+  const check = '<svg viewBox="0 0 24 24" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>';
+  const info = '<svg viewBox="0 0 24 24" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>';
+  let points = [], note = '';
+
+  if (a.type === 'Action') {
+    points = [
+      `Siège social en ${COUNTRY[a.country]} (Union européenne)`,
+      "Société soumise à l'impôt sur les sociétés de droit commun",
+      `Cotée sur ${a.market}`
+    ];
+    if (a.country !== 'FR') note = "Les dividendes de sociétés étrangères peuvent subir une retenue à la source non récupérable au sein du PEA.";
+  } else {
+    const physical = a.replication === 'Physique';
+    points = [
+      'OPCVM investi en permanence à 75 % minimum en titres UE/EEE',
+      physical
+        ? `Réplication physique : détient directement les actions de l'indice ${a.index}`
+        : `Réplication synthétique : panier d'actions européennes + swap sur l'indice ${a.index}`,
+      `Domicilié en ${COUNTRY[a.country]} (Union européenne)`
+    ];
+    if (!physical) note = "Le swap expose à un risque de contrepartie encadré par la réglementation UCITS (limité à 10 % de l'actif).";
+  }
+
+  $('#d-elig').innerHTML = `
+    <div class="flex items-center gap-2">
+      <span class="grid h-7 w-7 place-items-center rounded-full bg-emerald-400/15 ring-1 ring-emerald-400/30">
+        <svg viewBox="0 0 24 24" class="h-4 w-4 text-emerald-300" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>
+      </span>
+      <div>
+        <div class="text-sm font-semibold text-emerald-300">Éligible au PEA</div>
+        <div class="text-[11px] text-slate-500">Selon les critères réglementaires ; à reconfirmer chez votre courtier</div>
+      </div>
+    </div>
+    <ul class="mt-3 space-y-1.5 text-xs text-slate-300">${points.map((p) => `<li class="flex gap-2">${check}<span>${esc(p)}</span></li>`).join('')}</ul>
+    ${note ? `<p class="mt-3 flex gap-2 border-t border-white/5 pt-2.5 text-[11px] text-slate-400">${info}<span>${esc(note)}</span></p>` : ''}`;
+}
+
+/** Jauge de risque 1→7. */
+function renderRisk(a) {
+  const lvl = riskLevel(a.m.vol);
+  const palette = ['#34d399', '#6ee7b7', '#a3e635', '#facc15', '#fb923c', '#f87171', '#e11d48'];
+  $('#d-risk').innerHTML = palette.map((c, i) =>
+    `<div class="grid h-7 place-items-center rounded-md font-mono text-[11px] font-semibold transition"
+      style="${i + 1 === lvl ? `background:${c};color:#06090e` : `background:${c}1a;color:${c}80`}">${i + 1}</div>`).join('');
+  $('#d-risk-label').textContent = `${lvl}/7 · vol. ${fmtPct(a.m.vol, 1, false)}`;
+}
+
+function renderFavButton() {
+  const a = state.current;
+  if (!a) return;
+  const fav = state.favorites.has(a.ticker);
+  const b = $('#d-fav');
+  b.innerHTML = starIcon(fav);
+  b.classList.toggle('text-amber-300', fav);
+  b.classList.toggle('text-slate-400', !fav);
+  b.title = fav ? 'Retirer des favoris' : 'Ajouter aux favoris';
+}
+
+function renderPeriodTabs() {
+  $$('#period-tabs button').forEach((b) => {
+    const active = b.dataset.period === state.period;
+    b.className = `rounded-md px-3 py-1.5 font-medium transition ${active ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-slate-200'}`;
+  });
+  $('#ma50').checked = state.ma50;
+  $('#ma200').checked = state.ma200;
+}
+
+/** Données de la période sélectionnée. */
+function periodSlice(a) {
+  const start = indexMonthsAgo(a.dates, PERIODS[state.period]);
+  return {
+    s: a.series.slice(start),
+    d: a.dates.slice(start),
+    m50: a.ma50.slice(start),
+    m200: a.ma200.slice(start)
+  };
+}
+
+/** Graphique de tendance interactif en SVG (crosshair + infobulle). */
+function renderChart() {
+  const a = state.current;
+  if (!a) return;
+  const box = $('#chart');
+  const W = Math.max(280, Math.floor(box.clientWidth));
+  const H = W < 520 ? 230 : 310;
+  const { s, d, m50, m200 } = periodSlice(a);
+  const pad = { l: 12, r: 62, t: 18, b: 30 };
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+
+  // Échelle verticale incluant les moyennes mobiles affichées
+  const vals = [...s];
+  if (state.ma50) m50.forEach((v) => v != null && vals.push(v));
+  if (state.ma200) m200.forEach((v) => v != null && vals.push(v));
+  let min = Math.min(...vals), max = Math.max(...vals);
+  const span = max - min || max * 0.02;
+  min -= span * 0.08; max += span * 0.08;
+
+  const X = (i) => pad.l + (i / (s.length - 1)) * iw;
+  const Y = (v) => pad.t + (1 - (v - min) / (max - min)) * ih;
+
+  const periodPerf = s[s.length - 1] / s[0] - 1;
+  const col = periodPerf >= 0 ? '#34d399' : '#fb7185';
+  const line = s.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('');
+  const area = `${line}L${X(s.length - 1).toFixed(1)},${pad.t + ih}L${X(0).toFixed(1)},${pad.t + ih}Z`;
+  const maPath = (arr) => {
+    let p = '', started = false;
+    arr.forEach((v, i) => {
+      if (v == null) return;
+      p += `${started ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`;
+      started = true;
+    });
+    return p;
+  };
+
+  // Grille horizontale + étiquettes de prix
+  let grid = '';
+  for (let k = 0; k < 5; k++) {
+    const v = min + ((max - min) * k) / 4;
+    const y = Y(v).toFixed(1);
+    grid += `<line x1="${pad.l}" x2="${pad.l + iw}" y1="${y}" y2="${y}" stroke="rgba(148,163,184,.07)"/>
+      <text x="${pad.l + iw + 8}" y="${(+y + 4).toFixed(1)}" fill="#64748b" font-size="11" font-family="JetBrains Mono, monospace">${fmtNum(v)}</text>`;
+  }
+
+  // Étiquettes de dates
+  const nx = W < 520 ? 3 : 5;
+  let xl = '';
+  for (let k = 0; k < nx; k++) {
+    const i = Math.round((k * (s.length - 1)) / (nx - 1));
+    const anchor = k === 0 ? 'start' : k === nx - 1 ? 'end' : 'middle';
+    const label = state.period === '1M' || state.period === '6M' ? fmtDateShort(d[i]) : fmtMonthYear(d[i]);
+    xl += `<text x="${X(i).toFixed(1)}" y="${H - 8}" text-anchor="${anchor}" fill="#64748b" font-size="11">${label}</text>`;
+  }
+
+  const baseY = Y(s[0]).toFixed(1);
+  const lastY = Y(s[s.length - 1]).toFixed(1);
+
+  box.innerHTML = `
+    <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" class="block touch-none" role="img" aria-label="Évolution du cours de ${esc(a.name)}">
+      <defs>
+        <linearGradient id="area-grad" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stop-color="${col}" stop-opacity=".28"/>
+          <stop offset="100%" stop-color="${col}" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      ${grid}
+      <line x1="${pad.l}" x2="${pad.l + iw}" y1="${baseY}" y2="${baseY}" stroke="#94a3b8" stroke-opacity=".25" stroke-dasharray="3 4"/>
+      <path d="${area}" fill="url(#area-grad)"/>
+      ${state.ma200 ? `<path d="${maPath(m200)}" fill="none" stroke="#fbbf24" stroke-width="1.4" stroke-opacity=".85"/>` : ''}
+      ${state.ma50 ? `<path d="${maPath(m50)}" fill="none" stroke="#38bdf8" stroke-width="1.4" stroke-opacity=".85"/>` : ''}
+      <path d="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      <!-- Étiquette du dernier cours -->
+      <rect x="${pad.l + iw + 2}" y="${(+lastY - 10).toFixed(1)}" width="${pad.r - 4}" height="20" rx="5" fill="${col}"/>
+      <text x="${pad.l + iw + 8}" y="${(+lastY + 4).toFixed(1)}" fill="#06090e" font-size="11" font-weight="600" font-family="JetBrains Mono, monospace">${fmtNum(s[s.length - 1])}</text>
+      ${xl}
+      <!-- Réticule de survol -->
+      <g id="xh" style="display:none">
+        <line id="xh-line" y1="${pad.t}" y2="${pad.t + ih}" stroke="#cbd5e1" stroke-opacity=".35" stroke-dasharray="2 3"/>
+        <circle id="xh-dot" r="4.5" fill="${col}" stroke="#06090e" stroke-width="2"/>
+      </g>
+      <rect id="hover-zone" x="${pad.l}" y="${pad.t}" width="${iw}" height="${ih}" fill="transparent"/>
+    </svg>
+    <div id="chart-tip" class="chart-tooltip absolute left-0 top-0 rounded-lg border border-white/10 bg-ink-800/95 px-2.5 py-1.5 text-xs opacity-0 shadow-xl backdrop-blur"></div>`;
+
+  $('#period-perf').innerHTML = `<span class="text-slate-500">Période :</span> <span class="${colorOf(periodPerf)}">${fmtPct(periodPerf, 1)}</span>`;
+
+  // Interactions de survol (souris et tactile)
+  const svg = box.querySelector('svg');
+  const xh = svg.querySelector('#xh');
+  const xhLine = svg.querySelector('#xh-line');
+  const xhDot = svg.querySelector('#xh-dot');
+  const tip = box.querySelector('#chart-tip');
+
+  const onMove = (e) => {
+    const r = svg.getBoundingClientRect();
+    const px = (e.clientX - r.left) * (W / r.width);
+    let i = Math.round(((px - pad.l) / iw) * (s.length - 1));
+    i = Math.max(0, Math.min(s.length - 1, i));
+    const x = X(i), y = Y(s[i]);
+    xh.style.display = '';
+    xhLine.setAttribute('x1', x); xhLine.setAttribute('x2', x);
+    xhDot.setAttribute('cx', x); xhDot.setAttribute('cy', y);
+    const chg = s[i] / s[0] - 1;
+    tip.innerHTML = `<div class="text-slate-400">${fmtDate(d[i])}</div>
+      <div class="num font-mono font-semibold text-white">${fmtEUR(s[i])}</div>
+      <div class="num font-mono ${colorOf(chg)}">${fmtPct(chg)} <span class="text-slate-500">depuis le début</span></div>`;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left = x + 14;
+    if (left + tw > W - 4) left = x - tw - 14;
+    const top = Math.max(4, Math.min(H - th - 4, y - th / 2));
+    tip.style.transform = `translate(${left}px, ${top}px)`;
+    tip.style.opacity = '1';
+  };
+  const onLeave = () => { xh.style.display = 'none'; tip.style.opacity = '0'; };
+  svg.addEventListener('pointermove', onMove);
+  svg.addEventListener('pointerdown', onMove);
+  svg.addEventListener('pointerleave', onLeave);
+}
+
+/** Simulation d'un investissement au début de la période affichée. */
+function updateSim() {
+  const a = state.current;
+  if (!a) return;
+  const amount = Math.max(0, parseFloat($('#sim-amount').value) || 0);
+  const { s, d } = periodSlice(a);
+  const perf = s[s.length - 1] / s[0] - 1;
+  const value = amount * (1 + perf);
+  const gain = value - amount;
+  $('#sim-result').innerHTML = `
+    <div class="text-xs text-slate-500">Valeur au ${fmtDateShort(d[d.length - 1])} (investi le ${fmtDate(d[0])})</div>
+    <div class="num mt-1 font-mono text-xl font-semibold text-white">${fmtEUR(value)}</div>
+    <div class="num font-mono text-xs ${colorOf(gain)}">${gain >= 0 ? '+' : '−'}${fmtEUR(Math.abs(gain))} · ${fmtPct(perf, 1)}</div>`;
+}
+
+/* =====================================================================
+   9) INITIALISATION ET ÉCOUTEURS D'ÉVÉNEMENTS
+   ===================================================================== */
+function populateSelects() {
+  // Secteurs des actions et zones des ETF, regroupés
+  const stockSectors = [...new Set(ASSETS.filter((a) => a.type === 'Action').map((a) => a.sector))].sort((a, b) => a.localeCompare(b, 'fr'));
+  const etfZones = [...new Set(ASSETS.filter((a) => a.type === 'ETF').map((a) => a.sector))].sort((a, b) => a.localeCompare(b, 'fr'));
+  $('#sector').innerHTML =
+    '<option value="all">Tous secteurs &amp; zones</option>' +
+    `<optgroup label="Actions — secteurs">${stockSectors.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('')}</optgroup>` +
+    `<optgroup label="ETF — zones">${etfZones.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('')}</optgroup>`;
+
+  $('#sort').innerHTML = Object.entries(SORTS)
+    .map(([k, v]) => `<option value="${k}">Trier : ${v.label}</option>`).join('');
+}
+
+/** Affiche la vraie date de génération du fichier et signale les données anciennes. */
+function setUpdateStamps() {
+  const gen = DATA_META.generatedAt;
+  const ageDays = (Date.now() - gen.getTime()) / 86400000;
+  const stale = !(ageDays <= STALE_AFTER_DAYS);
+
+  $('#update-stamp').textContent = isNaN(gen) ? 'date inconnue' : fmtStamp(gen);
+  $('#update-stamp').className = `num font-medium ${stale ? 'text-amber-300' : 'text-emerald-300'}`;
+  $('#update-dot').className = `inline-block h-2 w-2 rounded-full ${stale ? 'bg-amber-400' : 'live-dot bg-emerald-400'}`;
+  $('#update-pill').className = `flex items-center gap-2 rounded-full border px-3 py-1.5 ${stale ? 'border-amber-400/30 bg-amber-400/5' : 'border-emerald-400/20 bg-emerald-400/5'}`;
+  $('#update-pill').title = `Dernière séance : ${fmtDate(DATA_META.lastMarketDate)}`;
+  $('#next-update').textContent = stale
+    ? 'Données anciennes : vérifiez l’onglet Actions de GitHub'
+    : `Dernière séance : ${fmtDate(DATA_META.lastMarketDate)}`;
+
+  const badge = $('#source-badge');
+  badge.textContent = `Source : ${DATA_META.source}`;
+  badge.classList.remove('hidden');
+}
+
+/** Message clair quand le fichier de données ne peut pas être lu. */
+function showLoadError(err) {
+  $('#loading').classList.add('hidden');
+  $('#update-stamp').textContent = 'indisponible';
+  const local = location.protocol === 'file:';
+  $('#load-error').innerHTML = `
+    <h2 class="text-base font-semibold text-rose-300">Impossible de charger les cours</h2>
+    ${local
+      ? `<p class="mt-2">Vous avez ouvert le fichier directement depuis votre ordinateur : les navigateurs bloquent alors la lecture de <code class="font-mono text-slate-200">data/prices.json</code>.</p>
+         <p class="mt-2">Ouvrez plutôt l'adresse de votre site GitHub Pages, du type <code class="font-mono text-slate-200">https://votre-pseudo.github.io/pea-radar/</code>.</p>`
+      : `<p class="mt-2">Le fichier <code class="font-mono text-slate-200">data/prices.json</code> est introuvable ou illisible. S'il s'agit de la première installation, lancez la mise à jour depuis l'onglet <strong>Actions</strong> de votre dépôt GitHub (« Mise à jour des cours » → « Run workflow »), puis rechargez cette page.</p>`}
+    <p class="mt-3 font-mono text-xs text-slate-500">Détail technique : ${esc(err && err.message ? err.message : err)}</p>`;
+  $('#load-error').classList.remove('hidden');
+}
+
+function bindEvents() {
+  // Recherche (avec léger anti-rebond)
+  let t;
+  $('#search').addEventListener('input', (e) => {
+    clearTimeout(t);
+    t = setTimeout(() => { state.query = e.target.value; applyFilters(); }, 120);
+  });
+
+  // Filtre par type
+  $('#type-filter').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-type]');
+    if (!b) return;
+    state.type = b.dataset.type;
+    applyFilters();
+  });
+
+  $('#sector').addEventListener('change', (e) => { state.sector = e.target.value; applyFilters(); });
+
+  $('#sort').addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    state.dir = SORTS[state.sort].dir;
+    applyFilters();
+  });
+
+  $('#sort-dir').addEventListener('click', () => {
+    state.dir = state.dir === 'desc' ? 'asc' : 'desc';
+    applyFilters();
+  });
+
+  $('#fav-only').addEventListener('click', () => { state.favOnly = !state.favOnly; applyFilters(); });
+
+  $('#reset').addEventListener('click', () => {
+    Object.assign(state, DEFAULTS);
+    $('#search').value = '';
+    applyFilters();
+  });
+
+  // Tri par clic sur les en-têtes du tableau
+  $$('.th-sort').forEach((btn) => btn.addEventListener('click', () => {
+    const key = btn.dataset.sort;
+    if (state.sort === key) state.dir = state.dir === 'desc' ? 'asc' : 'desc';
+    else { state.sort = key; state.dir = SORTS[key].dir; }
+    applyFilters();
+  }));
+
+  // Clic sur une ligne / carte → fiche détail ; clic sur l'étoile → favori
+  const onListClick = (e) => {
+    const fav = e.target.closest('[data-fav]');
+    if (fav) { e.stopPropagation(); toggleFav(fav.dataset.fav); return; }
+    const row = e.target.closest('[data-ticker]');
+    if (row) openDetail(row.dataset.ticker);
+  };
+  $('#table-body').addEventListener('click', onListClick);
+  $('#cards').addEventListener('click', onListClick);
+  [$('#table-body'), $('#cards')].forEach((el) => el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.dataset.ticker) openDetail(e.target.dataset.ticker);
+  }));
+
+  // Ouverture depuis la carte « meilleure performance »
+  $('#kpis').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-open]');
+    if (b) openDetail(b.dataset.open);
+  });
+
+  // Fiche détail
+  $('#d-close').addEventListener('click', closeDetail);
+  $('#modal-backdrop').addEventListener('click', closeDetail);
+  $('#d-prev').addEventListener('click', () => stepDetail(-1));
+  $('#d-next').addEventListener('click', () => stepDetail(1));
+  $('#d-fav').addEventListener('click', () => state.current && toggleFav(state.current.ticker));
+  $('#period-tabs').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-period]');
+    if (!b) return;
+    state.period = b.dataset.period;
+    renderPeriodTabs(); renderChart(); updateSim();
+  });
+  $('#ma50').addEventListener('change', (e) => { state.ma50 = e.target.checked; renderChart(); });
+  $('#ma200').addEventListener('change', (e) => { state.ma200 = e.target.checked; renderChart(); });
+  $('#sim-amount').addEventListener('input', updateSim);
+
+  // Raccourcis clavier
+  document.addEventListener('keydown', (e) => {
+    const modalOpen = !$('#modal').classList.contains('hidden');
+    if (modalOpen) {
+      if (e.key === 'Escape') closeDetail();
+      if (e.target.tagName === 'INPUT') return;
+      if (e.key === 'ArrowLeft') stepDetail(-1);
+      if (e.key === 'ArrowRight') stepDetail(1);
+      return;
+    }
+    if (e.key === '/' && document.activeElement !== $('#search')) {
+      e.preventDefault();
+      $('#search').focus();
+    }
+  });
+
+  // Redessine le graphique quand sa largeur change
+  let raf;
+  new ResizeObserver(() => {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => state.current && renderChart());
+  }).observe($('#chart'));
+}
+
+/* Démarrage : chargement des cours puis classement trié par performance sur 2 ans */
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    await loadData();
+  } catch (err) {
+    console.error('[PEA Radar] Chargement des données impossible :', err);
+    showLoadError(err);
+    return;
+  }
+  setUpdateStamps();
+  populateSelects();
+  bindEvents();
+  $('#loading').classList.add('hidden');
+  $('#dashboard').classList.remove('hidden');
+  applyFilters();
+});
+</script>
+</body>
+</html>
