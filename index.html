@@ -60,6 +60,7 @@
     select option, select optgroup { background: #0e141e; color: #e2e8f0; }
     input[type=number]::-webkit-inner-spin-button { opacity: .4; }
     .chart-tooltip { pointer-events: none; transition: opacity .12s; }
+    summary::-webkit-details-marker { display: none; }
   </style>
 </head>
 
@@ -266,6 +267,9 @@
             </div>
             <div id="d-rank" class="rounded-full border border-white/5 bg-white/[0.03] px-3 py-1 text-xs text-slate-400"></div>
           </div>
+
+          <!-- Signaux d'aide à la décision : momentum, MM200, révisions BPA, FCF -->
+          <section id="d-signals" class="mt-5" aria-label="Signaux"></section>
 
           <!-- Contrôles du graphique -->
           <div class="mt-5 flex flex-wrap items-center justify-between gap-3">
@@ -514,6 +518,8 @@ const fmtEUR0 = (v) => new Intl.NumberFormat('fr-FR', { style: 'currency', curre
 
 /** Pourcentage signé : 0.1234 → « +12,34 % ». */
 function fmtPct(v, digits = 2, signed = true) {
+  // Une valeur qui s'arrondit à zéro s'affiche « 0,0 % » (sans signe « − »)
+  if (Math.round(Math.abs(v) * 100 * 10 ** digits) === 0) v = 0;
   const s = (Math.abs(v) * 100).toLocaleString('fr-FR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
   const sign = v > 0 && signed ? '+' : v < 0 ? '−' : '';
   return `${sign}${s} %`;
@@ -532,7 +538,20 @@ const fmtStamp = (d) =>
   d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) +
   ' à ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 
-const colorOf = (v) => (v >= 0 ? 'text-emerald-400' : 'text-rose-400');
+const colorOf = (v) => (v > -0.00005 ? 'text-emerald-400' : 'text-rose-400');
+
+/** Valeur fondamentale d'un actif (null si absente). */
+const fundVal = (a, key) => (a.fund && typeof a.fund[key] === 'number' ? a.fund[key] : null);
+
+/** Banques et assureurs : le free cash flow n'y a pas de sens économique. */
+const isFinancial = (a) => a.sector === 'Banque' || a.sector === 'Assurance';
+
+/** Montant en milliards / millions d'euros. */
+function fmtBig(v) {
+  const abs = Math.abs(v), sign = v < 0 ? '−' : '';
+  if (abs >= 1e9) return `${sign}${(abs / 1e9).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Md€`;
+  return `${sign}${(abs / 1e6).toLocaleString('fr-FR', { maximumFractionDigits: 0 })} M€`;
+}
 
 /* =====================================================================
    3) CHARGEMENT DES DONNÉES RÉELLES
@@ -550,6 +569,7 @@ const STALE_AFTER_DAYS = 4;    // au-delà, les données sont signalées comme a
 let DATA_META = null;          // { generatedAt: Date, source, failed, lastMarketDate }
 let ASSETS = [];               // actifs de la base enrichis de leurs cours
 let RANK_2Y = new Map();       // rang de chaque actif sur la performance 2 ans
+let MOM_RANK = new Map();      // rang de chaque actif sur le momentum 12-1
 let MISSING = [];              // actifs de la base absents du fichier de données
 
 /** « 2026-11-13 » → Date locale (sans décalage de fuseau). */
@@ -626,7 +646,9 @@ function computeMetrics(p, d) {
     high52: Math.max(...year),
     low52: Math.min(...year),
     years,
-    fullHistory: years >= 1.95   // faux pour un titre coté depuis moins de 2 ans
+    fullHistory: years >= 1.95,  // faux pour un titre coté depuis moins de 2 ans
+    // Momentum 12-1 : performance d'il y a 12 mois à il y a 1 mois (dernier mois exclu)
+    mom121: years >= 0.98 ? p[indexMonthsAgo(d, 1)] / p[indexMonthsAgo(d, 12)] - 1 : null
   };
 }
 
@@ -661,7 +683,25 @@ function buildAsset(meta, raw) {
     spark: downsample(series, 70),
     m,
     // Rendement = dividendes versés sur 12 mois / cours actuel (en %)
-    div: raw.div12m > 0 ? (raw.div12m / m.last) * 100 : 0
+    div: raw.div12m > 0 ? (raw.div12m / m.last) * 100 : 0,
+    fund: raw.fund || null,     // fondamentaux (actions uniquement, peut être absent)
+    trend: maTrend(closeAll, ma200All)
+  };
+}
+
+/**
+ * Position du cours par rapport à sa MM200 et pente de la MM200
+ * (variation de la moyenne sur les 21 dernières séances ≈ 1 mois).
+ */
+function maTrend(closes, ma200) {
+  const n = closes.length;
+  const ma = ma200[n - 1];
+  const maPrev = n > 21 ? ma200[n - 22] : null;
+  if (ma == null) return null;
+  return {
+    ma200: ma,
+    dist: closes[n - 1] / ma - 1,
+    slope: maPrev != null ? ma / maPrev - 1 : null
   };
 }
 
@@ -694,6 +734,9 @@ async function loadData() {
   };
 
   RANK_2Y = new Map([...ASSETS].sort((a, b) => b.m.perf2y - a.m.perf2y).map((a, i) => [a.ticker, i + 1]));
+  const withMom = ASSETS.filter((a) => a.m.mom121 != null).sort((a, b) => b.m.mom121 - a.m.mom121);
+  MOM_RANK = new Map(withMom.map((a, i) => [a.ticker, i + 1]));
+  MOM_RANK.total = withMom.length;
 }
 
 /* =====================================================================
@@ -708,6 +751,10 @@ const SORTS = {
   vol:    { label: 'Volatilité',                     get: (a) => a.m.vol,    dir: 'asc'  },
   ratio:  { label: 'Ratio rendement / risque',       get: (a) => a.m.ratio,  dir: 'desc' },
   dd:     { label: 'Drawdown max (le plus faible)',  get: (a) => a.m.maxDD,  dir: 'desc' },
+  mom:    { label: 'Momentum 12-1 mois',             get: (a) => a.m.mom121, dir: 'desc' },
+  ma200:  { label: 'Écart à la MM200',               get: (a) => (a.trend ? a.trend.dist : null), dir: 'desc' },
+  rev:    { label: 'Révisions BPA (90 j)',           get: (a) => fundVal(a, 'epsChg90') ?? fundVal(a, 'epsChg30'), dir: 'desc' },
+  fcf:    { label: 'Rendement FCF',                  get: (a) => (isFinancial(a) ? null : fundVal(a, 'fcfYield')), dir: 'desc' },
   day:    { label: 'Variation du jour',              get: (a) => a.m.day,    dir: 'desc' },
   name:   { label: 'Nom',                            get: (a) => a.name,     dir: 'asc'  }
 };
@@ -824,6 +871,8 @@ function applyFilters() {
   const mult = state.dir === 'asc' ? 1 : -1;
   list.sort((x, y) => {
     const a = s.get(x), b = s.get(y);
+    // Les valeurs indisponibles (ETF sans BPA, etc.) vont toujours en fin de liste
+    if (a == null || b == null) return (a == null) - (b == null) || x.name.localeCompare(y.name, 'fr');
     if (typeof a === 'string') return a.localeCompare(b, 'fr') * mult;
     return (a - b) * mult || x.name.localeCompare(y.name, 'fr');
   });
@@ -1033,6 +1082,7 @@ function openDetail(ticker) {
   $('#d-facts').innerHTML = facts.map(([k, v]) =>
     `<div class="flex justify-between gap-3 border-t border-white/5 pt-1.5"><dt class="text-slate-500">${k}</dt><dd class="text-right text-slate-300">${esc(v)}</dd></div>`).join('');
 
+  renderSignals(a);
   renderEligibility(a);
   renderRisk(a);
   renderFavButton();
@@ -1069,6 +1119,153 @@ function stepDetail(delta) {
   if (idx === -1) idx = 0;
   const next = list[(idx + delta + list.length) % list.length];
   openDetail(next.ticker);
+}
+
+/* ---------------------------------------------------------------------
+   SIGNAUX : 4 indicateurs d'aide à la décision, lisibles d'un coup d'œil.
+   Chaque signal reçoit un statut : good (favorable), neutral, bad
+   (défavorable) ou na (non disponible / non applicable).
+   Les seuils sont des conventions simples de l'application, pas des règles
+   de marché : ils servent à trier l'information, pas à décider à votre place.
+   --------------------------------------------------------------------- */
+const SIGNAL_STYLES = {
+  good:    { label: 'Favorable',    pill: 'bg-emerald-400/15 text-emerald-300 ring-emerald-400/30', card: 'border-emerald-400/25 bg-emerald-400/[0.04]', value: 'text-emerald-300', dot: 'bg-emerald-400' },
+  neutral: { label: 'Neutre',       pill: 'bg-amber-400/10 text-amber-300 ring-amber-400/25',       card: 'border-amber-400/20 bg-amber-400/[0.03]',     value: 'text-amber-200',   dot: 'bg-amber-400' },
+  bad:     { label: 'Défavorable',  pill: 'bg-rose-400/15 text-rose-300 ring-rose-400/30',          card: 'border-rose-400/25 bg-rose-400/[0.04]',       value: 'text-rose-300',    dot: 'bg-rose-400' },
+  na:      { label: 'Indisponible', pill: 'bg-white/5 text-slate-400 ring-white/10',                card: 'border-white/5 bg-white/[0.02]',              value: 'text-slate-500',   dot: 'bg-slate-600' }
+};
+
+function computeSignals(a) {
+  const m = a.m, t = a.trend, isEtf = a.type === 'ETF';
+  const out = [];
+
+  /* 1. Momentum 12-1 mois */
+  if (m.mom121 == null) {
+    out.push({ title: 'Momentum 12-1 mois', status: 'na', value: '—', sub: 'Moins de 12 mois d’historique' });
+  } else {
+    out.push({
+      title: 'Momentum 12-1 mois',
+      status: m.mom121 >= 0.10 ? 'good' : m.mom121 < 0 ? 'bad' : 'neutral',
+      value: fmtPct(m.mom121, 1),
+      sub: `Rang ${MOM_RANK.get(a.ticker)} / ${MOM_RANK.total} de la base`
+    });
+  }
+  out[0].help = `<b>Calcul :</b> (cours il y a 1 mois ÷ cours il y a 12 mois) − 1. Le dernier mois est exclu car, à très court terme, les cours ont tendance à se retourner.<br>
+    <b>Lecture :</b> les titres qui ont le plus monté sur un an ont tendance à continuer quelques mois (Jegadeesh &amp; Titman, 1993).<br>
+    <b>Seuils :</b> favorable ≥ +10 %, défavorable &lt; 0 %.`;
+
+  /* 2. Cours vs MM200 et pente de la MM200 */
+  if (!t || t.slope == null) {
+    out.push({ title: 'Cours vs MM200', status: 'na', value: '—', sub: 'Historique insuffisant (200 séances)' });
+  } else {
+    const above = t.dist >= 0, rising = t.slope >= 0;
+    out.push({
+      title: 'Cours vs MM200',
+      status: above && rising ? 'good' : !above && !rising ? 'bad' : 'neutral',
+      value: fmtPct(t.dist, 1),
+      sub: `MM200 ${rising ? '↗ en hausse' : '↘ en baisse'} (${fmtPct(t.slope, 1)} sur 1 mois) · ${above && rising ? 'tendance haussière' : !above && !rising ? 'tendance baissière' : 'tendance mitigée'}`,
+      action: `<button data-toggle-ma200 class="mt-2 text-[11px] font-medium text-amber-300/90 underline-offset-2 hover:underline">${state.ma200 ? 'Masquer' : 'Afficher'} la MM200 sur le graphique</button>`
+    });
+  }
+  out[1].help = `<b>Calcul :</b> (cours ÷ moyenne mobile 200 jours) − 1, et pente de la MM200 sur le dernier mois.<br>
+    <b>Lecture :</b> au-dessus d'une MM200 qui monte, la tendance de fond est haussière ; sous une MM200 qui baisse, c'est l'inverse. Ce filtre écarte beaucoup de titres qui « ont l'air pas chers » mais continuent de chuter.<br>
+    <b>Statut :</b> favorable si au-dessus ET pente positive, défavorable si en dessous ET pente négative, neutre sinon.`;
+
+  /* 3. Révisions du consensus de BPA (année prochaine) */
+  const chg90 = fundVal(a, 'epsChg90'), chg30 = fundVal(a, 'epsChg30');
+  const up = fundVal(a, 'revUp30'), down = fundVal(a, 'revDown30');
+  const chg = chg90 ?? chg30;
+  if (isEtf) {
+    out.push({ title: 'Révisions BPA', status: 'na', value: '—', sub: 'Non applicable à un ETF' });
+  } else if (chg == null && up == null) {
+    out.push({ title: 'Révisions BPA', status: 'na', value: '—', sub: 'Pas de consensus disponible sur Yahoo' });
+  } else {
+    let status = 'neutral';
+    if (chg != null) status = chg >= 0.01 ? 'good' : chg <= -0.01 ? 'bad' : 'neutral';
+    else if (up != null) status = up - down > 0 ? 'good' : up - down < 0 ? 'bad' : 'neutral';
+    const parts = [];
+    if (chg90 != null && chg30 != null) parts.push(`30 j : ${fmtPct(chg30, 1)}`);
+    if (up != null) parts.push(`révisions 30 j : <span class="text-emerald-300">${up}↑</span> <span class="text-rose-300">${down}↓</span>`);
+    out.push({
+      title: 'Révisions BPA',
+      status,
+      value: chg != null ? fmtPct(chg, 1) : `${up - down > 0 ? '+' : ''}${up - down}`,
+      valueNote: chg != null ? (chg90 != null ? 'sur 90 j' : 'sur 30 j') : 'solde net 30 j',
+      sub: parts.join(' · ') || 'Consensus du BPA de l’an prochain'
+    });
+  }
+  out[2].help = `<b>Calcul :</b> variation sur 1 à 3 mois du consensus des analystes sur le BPA de l'an prochain, et nombre de révisions à la hausse moins à la baisse (source : Yahoo Finance).<br>
+    <b>Lecture :</b> quand les analystes relèvent leurs prévisions, le cours suit souvent avec retard ; c'est l'indicateur le plus lié aux fondamentaux.<br>
+    <b>Seuils :</b> favorable ≥ +1 % sur 90 jours, défavorable ≤ −1 %.`;
+
+  /* 4. Rendement du free cash flow */
+  const fy = fundVal(a, 'fcfYield');
+  if (isEtf) {
+    out.push({ title: 'Rendement FCF', status: 'na', value: '—', sub: 'Non applicable à un ETF' });
+  } else if (isFinancial(a)) {
+    out.push({ title: 'Rendement FCF', status: 'na', value: '—', sub: 'Peu pertinent pour une banque ou un assureur' });
+  } else if (fy == null) {
+    out.push({ title: 'Rendement FCF', status: 'na', value: '—', sub: 'Free cash flow non publié sur Yahoo' });
+  } else {
+    out.push({
+      title: 'Rendement FCF',
+      status: fy >= 0.05 ? 'good' : fy >= 0.02 ? 'neutral' : 'bad',
+      value: fmtPct(fy, 1),
+      sub: `FCF 12 mois : ${fmtBig(a.fund.fcf)} · capitalisation : ${fmtBig(a.fund.mcap)}`
+    });
+  }
+  out[3].help = `<b>Calcul :</b> free cash flow des 12 derniers mois ÷ capitalisation boursière (FCF calculé par Yahoo Finance).<br>
+    <b>Lecture :</b> garde-fou valorisation et qualité. Beaucoup de cash par rapport au prix = marge de sécurité ; un FCF négatif ou faible avec une valorisation élevée rend la hausse fragile. Non pertinent pour les banques et assureurs.<br>
+    <b>Seuils :</b> favorable ≥ 5 %, neutre 2 à 5 %, défavorable &lt; 2 % ou négatif.`;
+
+  return out;
+}
+
+function renderSignals(a) {
+  const signals = computeSignals(a);
+  const count = (s) => signals.filter((x) => x.status === s).length;
+  const applicable = signals.length - count('na');
+  const fundDate = a.fund && a.fund.asOf ? ` · fondamentaux au ${fmtDate(parseDate(a.fund.asOf))}` : '';
+
+  const dots = signals.map((s) => `<span class="h-2.5 w-2.5 rounded-full ${SIGNAL_STYLES[s.status].dot}" title="${s.title} : ${SIGNAL_STYLES[s.status].label}"></span>`).join('');
+
+  $('#d-signals').innerHTML = `
+    <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+      <div class="flex items-center gap-2">
+        <h3 class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Signaux</h3>
+        <div class="flex gap-1">${dots}</div>
+      </div>
+      <div class="text-xs text-slate-400">
+        <span class="font-semibold text-emerald-300">${count('good')} favorable${count('good') > 1 ? 's' : ''}</span> ·
+        <span class="text-amber-300">${count('neutral')} neutre${count('neutral') > 1 ? 's' : ''}</span> ·
+        <span class="text-rose-300">${count('bad')} défavorable${count('bad') > 1 ? 's' : ''}</span>
+        <span class="text-slate-500">sur ${applicable} applicable${applicable > 1 ? 's' : ''}</span>
+      </div>
+    </div>
+    <div class="grid gap-2 sm:grid-cols-2">
+      ${signals.map((s) => {
+        const st = SIGNAL_STYLES[s.status];
+        return `<div class="rounded-xl border p-3 ${st.card}">
+          <div class="flex items-start justify-between gap-2">
+            <div class="text-[11px] font-medium uppercase tracking-wider text-slate-400">${s.title}</div>
+            <span class="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset ${st.pill}">${st.label}</span>
+          </div>
+          <div class="mt-1.5 flex items-baseline gap-1.5">
+            <span class="num font-mono text-xl font-semibold ${st.value}">${s.value}</span>
+            ${s.valueNote ? `<span class="text-[11px] text-slate-500">${s.valueNote}</span>` : ''}
+          </div>
+          <div class="mt-0.5 text-[11px] leading-snug text-slate-400">${s.sub}</div>
+          ${s.action || ''}
+          <details class="group mt-2">
+            <summary class="cursor-pointer list-none text-[11px] text-slate-500 transition hover:text-slate-300">
+              <span class="group-open:hidden">ⓘ Comment le lire ?</span><span class="hidden group-open:inline">ⓘ Masquer l'explication</span>
+            </summary>
+            <p class="mt-1.5 text-[11px] leading-relaxed text-slate-400">${s.help}</p>
+          </details>
+        </div>`;
+      }).join('')}
+    </div>
+    <p class="mt-1.5 text-[10px] text-slate-600">Seuils indicatifs fixés par l'application${fundDate}. Ces signaux aident à trier, ils ne constituent pas une recommandation.</p>`;
 }
 
 /** Encadré de confirmation de l'éligibilité PEA, avec justification. */
@@ -1414,7 +1611,19 @@ function bindEvents() {
     renderPeriodTabs(); renderChart(); updateSim();
   });
   $('#ma50').addEventListener('change', (e) => { state.ma50 = e.target.checked; renderChart(); });
-  $('#ma200').addEventListener('change', (e) => { state.ma200 = e.target.checked; renderChart(); });
+  $('#ma200').addEventListener('change', (e) => {
+    state.ma200 = e.target.checked;
+    renderChart();
+    if (state.current) renderSignals(state.current);
+  });
+  // Bouton « Afficher la MM200 » de la carte de signal
+  $('#d-signals').addEventListener('click', (e) => {
+    if (!e.target.closest('[data-toggle-ma200]')) return;
+    state.ma200 = !state.ma200;
+    renderPeriodTabs();
+    renderChart();
+    renderSignals(state.current);
+  });
   $('#sim-amount').addEventListener('input', updateSim);
 
   // Raccourcis clavier
